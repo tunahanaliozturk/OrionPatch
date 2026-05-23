@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-
 namespace Moongazing.OrionPatch.Models;
 
 /// <summary>
@@ -17,6 +14,11 @@ public sealed class OutboxEnqueueOptions
     /// <summary>Optional headers serialized into the row's HeadersJson column.</summary>
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
 
-    /// <summary>Override the "when did this happen" timestamp; default is <see cref="DateTime.UtcNow"/> at enqueue time.</summary>
+    /// <summary>
+    /// Override the "when did this happen" timestamp; default is <see cref="DateTime.UtcNow"/> at enqueue time.
+    /// </summary>
+    /// <remarks>
+    /// Treated as UTC by convention; the enqueue boundary (Task 5) will enforce <c>Kind == DateTimeKind.Utc</c>.
+    /// </remarks>
     public DateTime? OccurredAtUtc { get; init; }
 }

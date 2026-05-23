@@ -1,5 +1,3 @@
-using System.Threading;
-using System.Threading.Tasks;
 using Moongazing.OrionPatch.Models;
 
 namespace Moongazing.OrionPatch.Abstractions;
@@ -19,6 +17,6 @@ public interface IOutboxSink
     /// statement of this method.
     /// </summary>
     /// <param name="envelope">The envelope to dispatch.</param>
-    /// <param name="ct">Cancellation token observed for the duration of the send.</param>
-    Task SendAsync(OutboxEnvelope envelope, CancellationToken ct);
+    /// <param name="cancellationToken">Cancellation token observed for the duration of the send.</param>
+    Task SendAsync(OutboxEnvelope envelope, CancellationToken cancellationToken = default);
 }

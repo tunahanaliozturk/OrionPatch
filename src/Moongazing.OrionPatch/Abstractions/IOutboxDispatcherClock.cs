@@ -1,7 +1,3 @@
-using System;
-using System.Threading;
-using System.Threading.Tasks;
-
 namespace Moongazing.OrionPatch.Abstractions;
 
 /// <summary>
@@ -14,6 +10,6 @@ public interface IOutboxDispatcherClock
 
     /// <summary>Asynchronously wait for the given duration.</summary>
     /// <param name="duration">How long to wait.</param>
-    /// <param name="ct">Cancellation token observed during the wait.</param>
-    Task DelayAsync(TimeSpan duration, CancellationToken ct);
+    /// <param name="cancellationToken">Cancellation token observed during the wait.</param>
+    Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken = default);
 }

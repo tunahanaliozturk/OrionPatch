@@ -1,5 +1,3 @@
-using System;
-
 namespace Moongazing.OrionPatch.Models;
 
 /// <summary>
@@ -7,6 +5,14 @@ namespace Moongazing.OrionPatch.Models;
 /// EF Core mapping for this type lives in the OrionPatch.EntityFrameworkCore package
 /// so the core library stays EF-free.
 /// </summary>
+/// <remarks>
+/// Mutability convention: identity and enqueue-time columns (<see cref="Id"/>, <see cref="MessageType"/>,
+/// <see cref="Payload"/>, <see cref="HeadersJson"/>, <see cref="CorrelationId"/>, <see cref="OccurredAtUtc"/>,
+/// <see cref="EnqueuedAtUtc"/>) are <c>init</c>-only because they are immutable for the row's lifetime;
+/// lifecycle columns (<see cref="Status"/>, <see cref="AttemptCount"/>, <see cref="ClaimedAtUtc"/>,
+/// <see cref="ClaimedBy"/>, <see cref="LastError"/>, <see cref="ProcessedAtUtc"/>, <see cref="NextAttemptAtUtc"/>)
+/// are <c>set</c> because the dispatcher mutates them on claim/complete/fail/dead-letter transitions.
+/// </remarks>
 public sealed class OutboxRow
 {
     /// <summary>Primary key.</summary>
@@ -24,7 +30,10 @@ public sealed class OutboxRow
     /// <summary>Optional correlation id.</summary>
     public string? CorrelationId { get; init; }
 
-    /// <summary>When the originating domain event occurred (UTC).</summary>
+    /// <summary>
+    /// When the originating domain event occurred (UTC). Treated as UTC by convention;
+    /// the enqueue boundary (Task 5) will enforce <c>Kind == DateTimeKind.Utc</c>.
+    /// </summary>
     public DateTime OccurredAtUtc { get; init; }
 
     /// <summary>When the row was written to the outbox (UTC); defaults to <see cref="OccurredAtUtc"/>.</summary>
