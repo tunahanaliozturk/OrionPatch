@@ -1,6 +1,7 @@
 namespace Moongazing.OrionPatch.Tests.Hosting;
 
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionPatch.Abstractions;
@@ -124,6 +125,56 @@ public class OutboxDispatcherHostedServiceTests
 
         Assert.Empty(sink.Dispatched);
         Assert.True(storage.ClaimNextCalls >= 1);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldLogOriginalSinkError_WhenStorageFailsDuringFailureRecovery()
+    {
+        var rowId = Guid.NewGuid();
+        var storage = new FlappingStorage();
+        await storage.AppendAsync(new[] { NewPendingRow(rowId, "T", "{}") }, default);
+
+        var sink = new ThrowingSink();
+        var capturedLogger = new CapturingLogger<OutboxDispatcherHostedService>();
+        var options = new OrionPatchOptions
+        {
+            PollingInterval = TimeSpan.FromMilliseconds(10),
+            MaxAttempts = 3,
+            BackoffStrategy = _ => TimeSpan.FromMilliseconds(5),
+        };
+
+        var svc = new OutboxDispatcherHostedService(
+            storage, sink, Options.Create(options), new SystemClockProxy(), capturedLogger);
+
+        using var cts = new CancellationTokenSource();
+        await svc.StartAsync(cts.Token);
+
+        await WaitFor(
+            () =>
+            {
+                lock (capturedLogger.Entries)
+                {
+                    return capturedLogger.Entries.Any(e =>
+                        e.Message.Contains("storage failure while recording dispatch failure", StringComparison.OrdinalIgnoreCase));
+                }
+            },
+            TimeSpan.FromSeconds(5));
+
+        await cts.CancelAsync();
+        await svc.StopAsync(default);
+
+        (LogLevel Level, string Message, Exception? Exception) entry;
+        lock (capturedLogger.Entries)
+        {
+            entry = capturedLogger.Entries.First(e =>
+                e.Message.Contains("storage failure while recording dispatch failure", StringComparison.OrdinalIgnoreCase));
+        }
+
+        // The original sink error is carried as a structured-logging property and rendered into the message.
+        Assert.Contains("sink failure for test", entry.Message, StringComparison.OrdinalIgnoreCase);
+        // The storage exception is the one bound to the Exception slot.
+        Assert.IsType<InvalidOperationException>(entry.Exception);
+        Assert.Equal("storage flap", entry.Exception!.Message);
     }
 
     [Fact]
@@ -264,5 +315,47 @@ public class OutboxDispatcherHostedServiceTests
         public DateTime UtcNow => DateTime.UtcNow;
         public Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken = default) =>
             Task.Delay(duration, cancellationToken);
+    }
+
+    // Storage decorator that succeeds on Append/Claim/Complete (so the dispatcher can claim and
+    // attempt) but throws on FailAsync/DeadLetterAsync to simulate a storage flap during the
+    // sink-failure recovery path.
+    private sealed class FlappingStorage : IOutboxStorage
+    {
+        private readonly InMemoryStorage inner = new();
+
+        public Task AppendAsync(IReadOnlyList<OutboxRow> rows, CancellationToken cancellationToken = default) =>
+            inner.AppendAsync(rows, cancellationToken);
+
+        public Task<IReadOnlyList<OutboxRow>> ClaimNextAsync(int batchSize, string dispatcherIdentity, TimeSpan leaseDuration, CancellationToken cancellationToken = default) =>
+            inner.ClaimNextAsync(batchSize, dispatcherIdentity, leaseDuration, cancellationToken);
+
+        public Task CompleteAsync(Guid rowId, DateTime processedAtUtc, CancellationToken cancellationToken = default) =>
+            inner.CompleteAsync(rowId, processedAtUtc, cancellationToken);
+
+        public Task FailAsync(Guid rowId, string errorMessage, DateTime nextAttemptAtUtc, CancellationToken cancellationToken = default) =>
+            Task.FromException(new InvalidOperationException("storage flap"));
+
+        public Task DeadLetterAsync(Guid rowId, string errorMessage, CancellationToken cancellationToken = default) =>
+            Task.FromException(new InvalidOperationException("storage flap"));
+
+        public Task<long> QueueDepthAsync(CancellationToken cancellationToken = default) =>
+            inner.QueueDepthAsync(cancellationToken);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
+
+        IDisposable? ILogger.BeginScope<TState>(TState state) => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            lock (Entries)
+            {
+                Entries.Add((logLevel, message, exception));
+            }
+        }
     }
 }

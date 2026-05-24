@@ -16,6 +16,15 @@ public interface IOutboxSink
     /// "row marked Processed". Best practice: keep the external publish the last
     /// statement of this method.
     /// </summary>
+    /// <remarks>
+    /// Best practice: deduplicate at the destination on <see cref="Models.OutboxEnvelope.Id"/>,
+    /// or perform an upsert. The dispatcher may re-invoke this method with the same envelope id
+    /// after a failure between successful send and successful storage acknowledgement, or after
+    /// a lease-expiry race when the sink runtime exceeds
+    /// <see cref="Configuration.OrionPatchOptions.LeaseDuration"/>. Keep the external publish the
+    /// last statement of the implementation so a failure after publish does not silently lose
+    /// acknowledgement.
+    /// </remarks>
     /// <param name="envelope">The envelope to dispatch.</param>
     /// <param name="cancellationToken">Cancellation token observed for the duration of the send.</param>
     Task SendAsync(OutboxEnvelope envelope, CancellationToken cancellationToken = default);

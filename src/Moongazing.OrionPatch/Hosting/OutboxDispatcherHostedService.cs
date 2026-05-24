@@ -15,6 +15,16 @@ using Moongazing.OrionPatch.Telemetry;
 /// dispatches each through <see cref="IOutboxSink"/> at-least-once, and applies
 /// the configured retry + dead-letter policy on failure.
 /// </summary>
+/// <remarks>
+/// Delivery is at-least-once. Duplicates can occur in two known scenarios: (1) the sink
+/// succeeds but the subsequent <see cref="IOutboxStorage.CompleteAsync"/> write fails or
+/// the process crashes before it runs, so the row stays <see cref="Models.OutboxStatus.Claimed"/>,
+/// the lease expires, and another dispatcher re-delivers; (2) the sink call exceeds
+/// <see cref="OrionPatchOptions.LeaseDuration"/>, allowing another dispatcher to claim the
+/// same row mid-flight. Consumer sinks MUST therefore be idempotent — typically by
+/// deduplicating on <see cref="Models.OutboxEnvelope.Id"/> at the destination, or by
+/// treating writes as upserts.
+/// </remarks>
 public sealed partial class OutboxDispatcherHostedService : BackgroundService
 {
     private readonly IOutboxStorage storage;
@@ -144,20 +154,41 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
         catch (Exception ex)
         {
             var truncated = Truncate(ex.ToString(), 4000);
-            if (attempt >= opts.MaxAttempts)
+            try
             {
-                await storage.DeadLetterAsync(row.Id, truncated, cancellationToken).ConfigureAwait(false);
-                OrionPatchDiagnostics.DeadLettered.Add(1);
+                if (attempt >= opts.MaxAttempts)
+                {
+                    await storage.DeadLetterAsync(row.Id, truncated, cancellationToken).ConfigureAwait(false);
+                    OrionPatchDiagnostics.DeadLettered.Add(1);
+                }
+                else
+                {
+                    var nextAttempt = clock.UtcNow.Add(opts.BackoffStrategy(attempt));
+                    await storage.FailAsync(row.Id, truncated, nextAttempt, cancellationToken).ConfigureAwait(false);
+                    OrionPatchDiagnostics.Failed.Add(1);
+                }
             }
-            else
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                var nextAttempt = clock.UtcNow.Add(opts.BackoffStrategy(attempt));
-                await storage.FailAsync(row.Id, truncated, nextAttempt, cancellationToken).ConfigureAwait(false);
-                OrionPatchDiagnostics.Failed.Add(1);
+                throw;
+            }
+            catch (Exception storageEx)
+            {
+                LogStorageFailureWhileRecordingDispatchFailure(logger, ex.ToString(), storageEx);
+                // Re-throw so the outer ExecuteAsync catch triggers the dispatcher back-off.
+                // Row stays in Claimed; lease expiry will surface it for re-attempt.
+                throw;
             }
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
         }
     }
+
+    [LoggerMessage(
+        EventId = 2,
+        Level = LogLevel.Error,
+        Message = "OrionPatch storage failure while recording dispatch failure (original sink error: {SinkError})")]
+    private static partial void LogStorageFailureWhileRecordingDispatchFailure(
+        ILogger logger, string sinkError, Exception storageException);
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 }

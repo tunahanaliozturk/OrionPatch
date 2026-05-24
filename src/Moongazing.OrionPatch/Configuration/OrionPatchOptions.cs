@@ -45,7 +45,9 @@ public sealed class OrionPatchOptions
     private Func<string> _dispatcherIdentityFactory = DefaultDispatcherIdentity.Create;
 
     /// <summary>
-    /// Returns the identity string stamped onto claimed rows. Default: <c>{MachineName}/{ProcessId}</c>.
+    /// Produces the identity string stamped onto claimed rows. Evaluated once when the
+    /// dispatcher's background loop starts; the resulting string is reused for every claim
+    /// made by this dispatcher instance. Default: <c>{MachineName}/{ProcessId}</c>.
     /// </summary>
     /// <exception cref="ArgumentNullException">Thrown when set to <see langword="null"/>.</exception>
     public Func<string> DispatcherIdentityFactory
