@@ -24,21 +24,61 @@ public sealed class OrionPatchOptions
     /// <summary>When false, the background dispatcher is not started (writer-only replicas).</summary>
     public bool DispatcherEnabled { get; set; } = true;
 
+    private Func<int, TimeSpan> _backoffStrategy =
+        Configuration.BackoffStrategy.Exponential(TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(30));
+
     /// <summary>
     /// Attempt-number to delay mapping. Default: exponential doubling 1s..30min.
     /// See <see cref="Configuration.BackoffStrategy"/> for built-in factories.
     /// </summary>
-    public Func<int, TimeSpan> BackoffStrategy { get; set; } =
-        Configuration.BackoffStrategy.Exponential(TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(30));
+    /// <exception cref="ArgumentNullException">Thrown when set to <see langword="null"/>.</exception>
+    public Func<int, TimeSpan> BackoffStrategy
+    {
+        get => _backoffStrategy;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _backoffStrategy = value;
+        }
+    }
+
+    private Func<string> _dispatcherIdentityFactory = DefaultDispatcherIdentity.Create;
 
     /// <summary>
     /// Returns the identity string stamped onto claimed rows. Default: <c>{MachineName}/{ProcessId}</c>.
     /// </summary>
-    public Func<string> DispatcherIdentityFactory { get; set; } = DefaultDispatcherIdentity.Create;
+    /// <exception cref="ArgumentNullException">Thrown when set to <see langword="null"/>.</exception>
+    public Func<string> DispatcherIdentityFactory
+    {
+        get => _dispatcherIdentityFactory;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _dispatcherIdentityFactory = value;
+        }
+    }
+
+    private JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
     /// <see cref="JsonSerializerOptions"/> used for payload serialization at enqueue and
     /// deserialization at dispatch.
     /// </summary>
-    public JsonSerializerOptions JsonOptions { get; set; } = new(JsonSerializerDefaults.Web);
+    /// <remarks>
+    /// Configure this instance before the host starts. Once the dispatcher serializes its first
+    /// payload, <see cref="System.Text.Json.JsonSerializerOptions"/> freezes and any further
+    /// mutation throws <see cref="System.InvalidOperationException"/>. Either fully configure the
+    /// instance during DI setup, or replace it wholesale with a new instance (which is permitted
+    /// via the setter).
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">Thrown when set to <see langword="null"/>.</exception>
+    public JsonSerializerOptions JsonOptions
+    {
+        get => _jsonOptions;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _jsonOptions = value;
+        }
+    }
 }

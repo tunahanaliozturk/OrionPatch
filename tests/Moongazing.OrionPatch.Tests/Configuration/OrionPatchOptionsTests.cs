@@ -27,4 +27,25 @@ public class OrionPatchOptionsTests
         var id = o.DispatcherIdentityFactory();
         Assert.False(string.IsNullOrWhiteSpace(id));
     }
+
+    [Fact]
+    public void BackoffStrategy_ShouldThrow_WhenSetToNull()
+    {
+        var o = new OrionPatchOptions();
+        Assert.Throws<ArgumentNullException>(() => o.BackoffStrategy = null!);
+    }
+
+    [Fact]
+    public void DispatcherIdentityFactory_ShouldThrow_WhenSetToNull()
+    {
+        var o = new OrionPatchOptions();
+        Assert.Throws<ArgumentNullException>(() => o.DispatcherIdentityFactory = null!);
+    }
+
+    [Fact]
+    public void JsonOptions_ShouldThrow_WhenSetToNull()
+    {
+        var o = new OrionPatchOptions();
+        Assert.Throws<ArgumentNullException>(() => o.JsonOptions = null!);
+    }
 }

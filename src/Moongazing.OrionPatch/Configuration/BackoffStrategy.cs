@@ -22,7 +22,16 @@ public static class BackoffStrategy
                 return TimeSpan.Zero;
             }
 
-            long ticks = initial.Ticks * (1L << Math.Min(attempt - 1, 30));
+            int shift = Math.Min(attempt - 1, 30);
+
+            // If initial.Ticks << shift would overflow long, saturate to max.
+            // initial.Ticks > (long.MaxValue >> shift) means the left-shift would lose the top bit.
+            if (initial.Ticks > 0 && initial.Ticks > (long.MaxValue >> shift))
+            {
+                return max;
+            }
+
+            long ticks = initial.Ticks << shift;
             return TimeSpan.FromTicks(Math.Min(ticks, max.Ticks));
         };
 

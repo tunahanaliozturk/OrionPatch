@@ -19,8 +19,12 @@ internal sealed class MessageSerializer
 
     /// <summary>Serialize <paramref name="value"/> using its runtime type.</summary>
     /// <typeparam name="T">Compile-time message type; serialization uses <c>value.GetType()</c>.</typeparam>
-    /// <param name="value">Message instance.</param>
+    /// <param name="value">The message instance; must be non-null.</param>
     /// <returns>JSON payload string.</returns>
-    public string Serialize<T>(T value) where T : class =>
-        JsonSerializer.Serialize(value, value.GetType(), jsonOptions);
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="value"/> is <see langword="null"/>.</exception>
+    public string Serialize<T>(T value) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return JsonSerializer.Serialize(value, value.GetType(), jsonOptions);
+    }
 }
