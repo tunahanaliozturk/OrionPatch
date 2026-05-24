@@ -15,4 +15,7 @@
     <None Include="..\..\docs\icon.png" Pack="true" PackagePath="" Visible="false" />
     <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionPatch.Tests" />
+  </ItemGroup>
 </Project>
