@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>OrionPatch.EntityFrameworkCore</PackageId>
+    <Description>EF Core storage backend for OrionPatch. Adds the OrionPatch_Outbox table; SaveChangesInterceptor flushes buffered messages into the user's transaction.</Description>
+    <PackageTags>outbox;ef-core;entity-framework;orionpatch;transactional;savechangesinterceptor</PackageTags>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\docs\icon.png" Pack="true" PackagePath="" Visible="false" />
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionPatch.EntityFrameworkCore.Tests" />
+  </ItemGroup>
+</Project>

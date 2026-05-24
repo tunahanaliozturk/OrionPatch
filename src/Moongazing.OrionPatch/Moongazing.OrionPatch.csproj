@@ -18,5 +18,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Moongazing.OrionPatch.Tests" />
+    <InternalsVisibleTo Include="Moongazing.OrionPatch.EntityFrameworkCore" />
+    <InternalsVisibleTo Include="Moongazing.OrionPatch.EntityFrameworkCore.Tests" />
   </ItemGroup>
 </Project>
