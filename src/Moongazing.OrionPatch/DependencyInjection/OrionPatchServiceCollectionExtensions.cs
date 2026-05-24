@@ -2,9 +2,11 @@ namespace Moongazing.OrionPatch.DependencyInjection;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionPatch.Abstractions;
 using Moongazing.OrionPatch.Configuration;
+using Moongazing.OrionPatch.Hosting;
 using Moongazing.OrionPatch.Internal;
 
 /// <summary>
@@ -37,6 +39,16 @@ public static class OrionPatchServiceCollectionExtensions
         services.TryAddSingleton<MessageTypeNameResolver>();
         services.TryAddSingleton(sp =>
             new MessageSerializer(sp.GetRequiredService<IOptions<OrionPatchOptions>>().Value.JsonOptions));
+
+        services.AddSingleton<IHostedService>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<OrionPatchOptions>>().Value;
+            if (!opts.DispatcherEnabled)
+            {
+                return new NoOpHostedService();
+            }
+            return ActivatorUtilities.CreateInstance<OutboxDispatcherHostedService>(sp);
+        });
 
         return new OrionPatchBuilder(services);
     }
