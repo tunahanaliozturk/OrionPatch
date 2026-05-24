@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>OrionPatch.Testing</PackageId>
+    <Description>Test helpers for OrionPatch. In-memory IOutboxStorage, deterministic dispatcher driver, CapturingOutboxSink, TestClock, and fluent OutboxAssertions. Zero EF Core dependency.</Description>
+    <PackageTags>outbox;testing;orionpatch;in-memory;deterministic</PackageTags>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\docs\icon.png" Pack="true" PackagePath="" Visible="false" />
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionPatch.Testing.Tests" />
+  </ItemGroup>
+</Project>
