@@ -1,4 +1,4 @@
-namespace Moongazing.OrionPatch.Channel;
+namespace Moongazing.OrionPatch.Channels;
 
 using System.Threading.Channels;
 

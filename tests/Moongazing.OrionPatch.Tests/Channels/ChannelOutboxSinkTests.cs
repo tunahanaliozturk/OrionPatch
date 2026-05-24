@@ -1,7 +1,7 @@
-namespace Moongazing.OrionPatch.Tests.Channel;
+namespace Moongazing.OrionPatch.Tests.Channels;
 
 using System.Threading.Channels;
-using Moongazing.OrionPatch.Channel;
+using Moongazing.OrionPatch.Channels;
 using Moongazing.OrionPatch.Models;
 using Xunit;
 

@@ -1,8 +1,9 @@
 namespace Moongazing.OrionPatch.DependencyInjection;
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Moongazing.OrionPatch.Abstractions;
-using Moongazing.OrionPatch.Channel;
+using Moongazing.OrionPatch.Channels;
 
 /// <summary>
 /// Fluent extensions on <see cref="OrionPatchBuilder"/> for registering sinks.
@@ -16,10 +17,15 @@ public static class OutboxBuilderExtensions
     /// <param name="builder">Builder returned from <see cref="OrionPatchServiceCollectionExtensions.AddOrionPatch"/>.</param>
     /// <returns>The same builder for chaining.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is null.</exception>
+    /// <remarks>
+    /// Calling this method removes any previously-registered <see cref="IOutboxSink"/> so the resulting
+    /// <see cref="IServiceProvider"/> resolves exactly one sink. Last call wins.
+    /// </remarks>
     public static OrionPatchBuilder UseSink<TSink>(this OrionPatchBuilder builder)
         where TSink : class, IOutboxSink
     {
         ArgumentNullException.ThrowIfNull(builder);
+        builder.Services.RemoveAll<IOutboxSink>();
         builder.Services.AddSingleton<IOutboxSink, TSink>();
         return builder;
     }
@@ -33,6 +39,10 @@ public static class OutboxBuilderExtensions
     /// <param name="configure">Optional callback to tune <see cref="ChannelOutboxSinkOptions"/>; defaults are applied when omitted.</param>
     /// <returns>The same builder for chaining.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is null.</exception>
+    /// <remarks>
+    /// Calling this method removes any previously-registered <see cref="IOutboxSink"/> so the resulting
+    /// <see cref="IServiceProvider"/> resolves exactly one sink. Last call wins.
+    /// </remarks>
     public static OrionPatchBuilder UseChannelSink(
         this OrionPatchBuilder builder,
         Action<ChannelOutboxSinkOptions>? configure = null)
@@ -44,6 +54,7 @@ public static class OutboxBuilderExtensions
 
         // Register the options instance and the concrete sink as one singleton,
         // then expose the same instance through the IOutboxSink contract.
+        builder.Services.RemoveAll<IOutboxSink>();
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<ChannelOutboxSink>();
         builder.Services.AddSingleton<IOutboxSink>(sp => sp.GetRequiredService<ChannelOutboxSink>());

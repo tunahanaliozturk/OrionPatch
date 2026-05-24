@@ -1,11 +1,11 @@
-namespace Moongazing.OrionPatch.Channel;
+namespace Moongazing.OrionPatch.Channels;
 
 using System.Threading.Channels;
 using Moongazing.OrionPatch.Abstractions;
 using Moongazing.OrionPatch.Models;
 
 /// <summary>
-/// In-process <see cref="IOutboxSink"/> backed by a bounded <see cref="System.Threading.Channels.Channel{T}"/>.
+/// In-process <see cref="IOutboxSink"/> backed by a bounded <see cref="Channel{T}"/>.
 /// Useful for monoliths (in-process pub/sub fan-out) and unit tests. Zero external dependency.
 /// Concrete broker sinks (RabbitMQ, Azure Service Bus, Kafka) live in opt-in sub-packages on
 /// the v0.2+ roadmap; this sink is the only one shipped at v0.1.0.
@@ -20,7 +20,7 @@ public sealed class ChannelOutboxSink : IOutboxSink
     public ChannelOutboxSink(ChannelOutboxSinkOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        channel = System.Threading.Channels.Channel.CreateBounded<OutboxEnvelope>(
+        channel = Channel.CreateBounded<OutboxEnvelope>(
             new BoundedChannelOptions(options.Capacity)
             {
                 FullMode = options.FullMode,

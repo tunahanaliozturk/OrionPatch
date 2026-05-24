@@ -3,7 +3,7 @@ namespace Moongazing.OrionPatch.Tests.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionPatch.Abstractions;
-using Moongazing.OrionPatch.Channel;
+using Moongazing.OrionPatch.Channels;
 using Moongazing.OrionPatch.Configuration;
 using Moongazing.OrionPatch.DependencyInjection;
 using Xunit;
@@ -73,6 +73,37 @@ public class AddOrionPatchTests
     {
         IServiceCollection services = null!;
         Assert.Throws<ArgumentNullException>(() => services.AddOrionPatch());
+    }
+
+    [Fact]
+    public void UseSink_ShouldThrow_WhenBuilderIsNull()
+    {
+        OrionPatchBuilder builder = null!;
+        Assert.Throws<ArgumentNullException>(() => builder.UseSink<RecordingSink>());
+    }
+
+    [Fact]
+    public void UseChannelSink_ShouldThrow_WhenBuilderIsNull()
+    {
+        OrionPatchBuilder builder = null!;
+        Assert.Throws<ArgumentNullException>(() => builder.UseChannelSink());
+    }
+
+    [Fact]
+    public void UseSink_ShouldReplacePreviousSink_WhenCalledAfterUseChannelSink()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddOrionPatch()
+            .UseChannelSink()
+            .UseSink<RecordingSink>();
+
+        var sp = services.BuildServiceProvider();
+        var sink = sp.GetRequiredService<IOutboxSink>();
+        var all = sp.GetServices<IOutboxSink>().ToList();
+
+        Assert.IsType<RecordingSink>(sink);
+        Assert.Single(all);
     }
 
     private sealed class RecordingSink : IOutboxSink
