@@ -47,7 +47,7 @@ internal sealed class SkipLockedClaimStrategy(SqlDialect dialect) : IClaimStrate
     private readonly CompareAndSwapClaimStrategy fallback = new();
 
     /// <summary>Dialect this strategy was constructed with.</summary>
-    public SqlDialect Dialect => dialect;
+    internal SqlDialect Dialect => dialect;
 
     /// <inheritdoc/>
     /// <param name="db">DbContext bound to the consumer's connection; must be non-null.</param>

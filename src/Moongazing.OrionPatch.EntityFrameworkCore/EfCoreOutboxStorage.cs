@@ -20,6 +20,18 @@ using Moongazing.OrionPatch.Models;
 /// thread-affinity restriction applies — do not invoke any of the lifecycle methods
 /// concurrently on the same <see cref="DbContext"/>.
 /// </para>
+/// <para>
+/// Complete/Fail/DeadLetter mutations use <c>ExecuteUpdateAsync</c>, which bypasses
+/// EF Core's change tracker. The storage class itself never tracks <see cref="Models.OutboxRow"/>
+/// (every read uses <c>AsNoTracking()</c>), so the library is self-consistent. If a consumer
+/// mixes their own tracked <c>OutboxRow</c> queries against the same DbContext, those entities
+/// will become stale after any storage write.
+/// </para>
+/// <para>
+/// This type does not emit telemetry. <see cref="Hosting.OutboxDispatcherHostedService"/>
+/// instruments <see cref="Abstractions.IOutboxStorage"/> calls externally; storage stays
+/// transparent to keep the per-operation cost predictable and to avoid double-counting.
+/// </para>
 /// </remarks>
 public sealed class EfCoreOutboxStorage : IOutboxStorage
 {

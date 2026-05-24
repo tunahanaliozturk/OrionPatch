@@ -47,6 +47,13 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
     /// <c>IDbContextOptionsConfiguration&lt;T&gt;</c>, so the wiring cannot be done
     /// implicitly from this extension.
     /// </para>
+    /// <para>
+    /// v0.1.0 supports one OrionPatch-bound DbContext per host. Calling this method twice
+    /// registers duplicate factories for <see cref="IOutbox"/> and <see cref="IOutboxStorage"/>;
+    /// the second call's registration wins for service resolution, but the first DbContext's
+    /// outbox becomes unreachable through the abstraction. First-class multi-DbContext support
+    /// is on the v0.2 roadmap. Until then, call this method exactly once per host.
+    /// </para>
     /// </remarks>
     public static OrionPatchBuilder UseEntityFrameworkCore<TDbContext>(this OrionPatchBuilder builder)
         where TDbContext : DbContext
@@ -89,6 +96,13 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
     /// <see cref="UseEntityFrameworkCore{TDbContext}(OrionPatchBuilder)"/> ran before
     /// the container was built.
     /// </exception>
+    /// <remarks>
+    /// Call this method exactly once per <see cref="DbContextOptionsBuilder"/>. EF Core's
+    /// <c>AddInterceptors</c> accumulates; calling <c>UseOrionPatch</c> twice would attach the
+    /// same interceptor instance to the options twice and the interceptor would fire twice per
+    /// save. The second invocation finds an empty buffer and no-ops, but it doubles the
+    /// interceptor's dispatch cost on every <c>SaveChanges</c>.
+    /// </remarks>
     public static DbContextOptionsBuilder UseOrionPatch(
         this DbContextOptionsBuilder builder,
         IServiceProvider serviceProvider)
