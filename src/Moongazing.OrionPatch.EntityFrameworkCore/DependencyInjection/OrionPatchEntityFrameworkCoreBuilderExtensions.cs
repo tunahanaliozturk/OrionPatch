@@ -2,6 +2,7 @@ namespace Moongazing.OrionPatch.EntityFrameworkCore.DependencyInjection;
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Moongazing.OrionPatch.Abstractions;
 using Moongazing.OrionPatch.DependencyInjection;
 using Moongazing.OrionPatch.Internal;
@@ -52,7 +53,7 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        builder.Services.AddSingleton<OrionPatchSaveChangesInterceptor>();
+        builder.Services.TryAddSingleton<OrionPatchSaveChangesInterceptor>();
 
         builder.Services.AddScoped(sp => new EfCoreOutbox(
             sp.GetRequiredService<TDbContext>(),
