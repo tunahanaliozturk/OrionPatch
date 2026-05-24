@@ -34,7 +34,12 @@ internal sealed class OutboxEntityConfiguration : IEntityTypeConfiguration<Outbo
         builder.Property(x => x.ProcessedAtUtc);
         builder.Property(x => x.NextAttemptAtUtc);
 
-        // Optimistic-concurrency token for the SQLite fallback claim strategy in Task 6.
+        // RowVersion shadow property for optimistic concurrency on providers that support
+        // native rowversion (SQL Server timestamp, Postgres xmin). On SQLite the column maps
+        // to BLOB but EF Core does NOT auto-increment it; Task 6's SQLite fallback claim
+        // strategy must populate the value manually before UPDATE (e.g., assign a new GUID
+        // bytes payload) or use a different concurrency primitive (compare-and-swap on
+        // Status + ClaimedBy).
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
         builder.HasIndex(x => new { x.Status, x.NextAttemptAtUtc })

@@ -84,6 +84,31 @@ public class EnqueueInterceptorTests
     }
 
     [Fact]
+    public async Task Enqueue_ShouldSerializeHeadersWithConfiguredJsonOptions_WhenOptionsHasACustomNamingPolicy()
+    {
+        using var db = await TestDb.CreateAsync();
+        var configured = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
+        };
+        var outbox = new EfCoreOutbox(db, new MessageTypeNameResolver(), new MessageSerializer(configured));
+
+        outbox.Enqueue(new OrderConfirmed(Guid.NewGuid(), 1),
+            new OutboxEnqueueOptions
+            {
+                Headers = new Dictionary<string, string> { ["TenantId"] = "acme" },
+            });
+        await db.SaveChangesAsync();
+
+        var row = await db.Set<OutboxRow>().SingleAsync();
+        Assert.NotNull(row.HeadersJson);
+        // Snake-case dictionary key policy must rewrite "TenantId" -> "tenant_id" on serialize.
+        Assert.Contains("tenant_id", row.HeadersJson);
+        Assert.DoesNotContain("TenantId", row.HeadersJson);
+    }
+
+    [Fact]
     public async Task SaveChanges_ShouldFlushMultipleEnqueuesInOneCommit_WhenCalledOnce()
     {
         using var db = await TestDb.CreateAsync();
@@ -116,13 +141,92 @@ public class EnqueueInterceptorTests
     }
 
     [Fact]
-    public void Constructor_ShouldThrow_WhenAnyDependencyIsNull()
+    public async Task SaveChangesFailed_ShouldRebufferRows_WhenSaveThrows()
     {
+        using var db = await TestDb.CreateAsync();
+        var outbox = new EfCoreOutbox(db, new MessageTypeNameResolver(), new MessageSerializer(new JsonSerializerOptions()));
+
+        outbox.Enqueue(new OrderConfirmed(Guid.NewGuid(), 1));
+
+        // Force the first SaveChanges to throw by adding an entity that violates a required-field constraint.
+        db.Set<Sample>().Add(new Sample { Id = Guid.NewGuid(), Name = null! }); // Name is required
+
+        await Assert.ThrowsAnyAsync<Exception>(() => db.SaveChangesAsync());
+
+        // The buffered outbox row should be re-buffered, not lost.
+        Assert.Single(outbox.Buffer);
+
+        // The change tracker should not retain a non-detached OutboxRow that would double-insert on retry.
+        Assert.DoesNotContain(db.ChangeTracker.Entries<OutboxRow>(), e => e.State != EntityState.Detached);
+
+        // Fix the offending entity and retry.
+        db.ChangeTracker.Clear();
+        db.Set<Sample>().Add(new Sample { Id = Guid.NewGuid(), Name = "fixed" });
+        await db.SaveChangesAsync();
+
+        var rows = await db.Set<OutboxRow>().AsNoTracking().ToListAsync();
+        Assert.Single(rows);
+    }
+
+    [Fact]
+    public async Task SaveChanges_ShouldNotDoubleInsert_WhenCalledTwiceAfterFlush()
+    {
+        using var db = await TestDb.CreateAsync();
+        var outbox = new EfCoreOutbox(db, new MessageTypeNameResolver(), new MessageSerializer(new JsonSerializerOptions()));
+
+        outbox.Enqueue(new OrderConfirmed(Guid.NewGuid(), 1));
+        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(); // second save with no further enqueues
+
+        var rows = await db.Set<OutboxRow>().AsNoTracking().ToListAsync();
+        Assert.Single(rows); // not 2 — Commit cleared PendingFlush so the second save adds nothing.
+    }
+
+    [Fact]
+    public async Task SaveChanges_ShouldPersistBothBatches_WhenCalledTwiceWithSeparateEnqueues()
+    {
+        using var db = await TestDb.CreateAsync();
+        var outbox = new EfCoreOutbox(db, new MessageTypeNameResolver(), new MessageSerializer(new JsonSerializerOptions()));
+
+        outbox.Enqueue(new OrderConfirmed(Guid.NewGuid(), 1));
+        await db.SaveChangesAsync();
+
+        outbox.Enqueue(new OrderConfirmed(Guid.NewGuid(), 2));
+        await db.SaveChangesAsync();
+
+        var rows = await db.Set<OutboxRow>().AsNoTracking().ToListAsync();
+        Assert.Equal(2, rows.Count);
+    }
+
+    [Fact]
+    public async Task RowVersion_ShouldBeNullOnSqlite_AfterInsert_PinningTask6Behavior()
+    {
+        using var db = await TestDb.CreateAsync();
+        var outbox = new EfCoreOutbox(db, new MessageTypeNameResolver(), new MessageSerializer(new JsonSerializerOptions()));
+
+        outbox.Enqueue(new OrderConfirmed(Guid.NewGuid(), 1));
+        await db.SaveChangesAsync();
+
+        var row = await db.Set<OutboxRow>().AsNoTracking().SingleAsync();
+        var rowVersion = db.Entry(row).Property<byte[]>("RowVersion").CurrentValue;
+
+        // Pinning behavior: SQLite does NOT auto-populate IsRowVersion() on insert.
+        // Task 6's SQLite claim strategy must handle this either by manual assignment
+        // or by using a different concurrency primitive (e.g., compare-and-swap on
+        // Status + ClaimedBy without relying on RowVersion).
+        Assert.Null(rowVersion);
+    }
+
+    [Fact]
+    public async Task Constructor_ShouldThrow_WhenAnyDependencyIsNull()
+    {
+        using var db = await TestDb.CreateAsync();
         var resolver = new MessageTypeNameResolver();
         var serializer = new MessageSerializer(new JsonSerializerOptions());
+
         Assert.Throws<ArgumentNullException>(() => new EfCoreOutbox(null!, resolver, serializer));
-        // db must be non-null; we don't actually need a real one for this guard test
-        // — use a stub instead. We'll defer the other two arg guards to the integration-level coverage.
+        Assert.Throws<ArgumentNullException>(() => new EfCoreOutbox(db, null!, serializer));
+        Assert.Throws<ArgumentNullException>(() => new EfCoreOutbox(db, resolver, null!));
     }
 }
 
