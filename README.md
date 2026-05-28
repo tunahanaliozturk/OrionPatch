@@ -162,6 +162,13 @@ OrionPatch is one of several standalone .NET libraries:
 
 Each ships separately; none depends on another at runtime.
 
+### See it in a real app
+
+[Moongazing.OrionShowcase](https://github.com/tunahanaliozturk/OrionShowcase) is a production-shaped banking sample integrating all six Orion packages end-to-end. OrionPatch outbox interceptor captures Account/Customer domain events into the same transaction as SaveChanges. DomainEventOutboxAdapter walks AggregateRoot.DomainEvents and enqueues via reflection on IOutbox.Enqueue<T>. Concrete usage:
+
+- [src/Moongazing.OrionShowcase.Infrastructure/Outbox/DomainEventOutboxAdapter.cs](https://github.com/tunahanaliozturk/OrionShowcase/blob/main/src/Moongazing.OrionShowcase.Infrastructure/Outbox/DomainEventOutboxAdapter.cs)
+- [src/Moongazing.OrionShowcase.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs](https://github.com/tunahanaliozturk/OrionShowcase/blob/main/src/Moongazing.OrionShowcase.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs)
+
 ## License
 
 MIT. See [LICENSE.txt](LICENSE.txt).
