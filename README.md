@@ -23,7 +23,43 @@ OrionPatch is a transactional outbox primitive for .NET. You enqueue a message i
 
 The package is deliberately small. It does NOT ship a broker — RabbitMQ, Azure Service Bus, Kafka, NATS sinks live in separate opt-in sub-packages on the v0.2+ roadmap. v0.1.0 ships one concrete sink: `ChannelOutboxSink` (in-process `System.Threading.Channels`, zero external dependency, useful for monoliths and tests).
 
-It is also deliberately scoped. No inbox in v0.1.0 — inbox idempotency, dedup tables, broker-side consumer wrappers are v0.2 work. v0.1.0 owns one thing well: getting a message from "I just did a domain mutation" to "the sink received it, exactly once per row, even if my process crashes between commit and send."
+It is also deliberately scoped. No inbox in v0.1.0 - inbox idempotency, dedup tables, broker-side consumer wrappers are v0.2 work. v0.1.0 owns one thing well: getting a message from "I just did a domain mutation" to "the sink received it, exactly once per row, even if my process crashes between commit and send."
+
+## How it works
+
+A domain event is enqueued by application code, persisted by the EF Core interceptor inside the same transaction as your data, then handed to the sink asynchronously by a hosted dispatcher.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application code
+    participant Ob as IOutbox
+    participant EF as DbContext
+    participant Int as OrionPatch<br/>SaveChangesInterceptor
+    participant DB as Outbox table<br/>(same DB, same tx)
+    participant Disp as Dispatcher<br/>(hosted service)
+    participant Sink as IOutboxSink
+
+    App->>Ob: Enqueue(OrderConfirmed)
+    App->>EF: SaveChangesAsync()
+    EF->>Int: SavingChanges
+    Int->>DB: INSERT OrionPatch_Outbox row
+    EF->>DB: INSERT/UPDATE domain rows
+    DB-->>EF: COMMIT (atomic)
+    EF-->>App: rows affected
+
+    loop poll interval
+        Disp->>DB: Claim ready rows (lease)
+        DB-->>Disp: OutboxEnvelope batch
+        Disp->>Sink: SendAsync(envelope)
+        Sink-->>Disp: ok
+        Disp->>DB: CompleteAsync(id)
+    end
+
+    Note over Disp,Sink: On crash between SendAsync and<br/>CompleteAsync the lease expires and<br/>another dispatcher re-delivers.<br/>Sinks must be idempotent.
+```
+
+The diagram shows the at-least-once contract clearly: the outbox row and the domain rows commit together, but the sink call happens outside the transaction.
 
 ## Why OrionPatch?
 
@@ -139,6 +175,10 @@ Consumer sinks MUST be idempotent. Typical patterns: deduplicate at the destinat
 - Histogram: `orionpatch.outbox.dispatch.duration` (milliseconds).
 
 Wire them up with the standard OpenTelemetry .NET helpers.
+
+## Benchmarks
+
+See [benchmarks.md](benchmarks.md) for the scenarios we plan to measure and the current status of the BenchmarkDotNet harness. A formal `bench/Moongazing.OrionPatch.Bench` project is on the v0.2 roadmap; the dispatcher has only been profiled informally during development so far.
 
 ## Roadmap
 
