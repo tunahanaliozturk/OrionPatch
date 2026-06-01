@@ -209,6 +209,10 @@ Each ships separately; none depends on another at runtime.
 - [src/Moongazing.OrionShowcase.Infrastructure/Outbox/DomainEventOutboxAdapter.cs](https://github.com/tunahanaliozturk/OrionShowcase/blob/main/src/Moongazing.OrionShowcase.Infrastructure/Outbox/DomainEventOutboxAdapter.cs)
 - [src/Moongazing.OrionShowcase.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs](https://github.com/tunahanaliozturk/OrionShowcase/blob/main/src/Moongazing.OrionShowcase.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs)
 
+## Contributing
+
+Issues and pull requests welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before opening one.
+
 ## License
 
 MIT. See [LICENSE.txt](LICENSE.txt).
