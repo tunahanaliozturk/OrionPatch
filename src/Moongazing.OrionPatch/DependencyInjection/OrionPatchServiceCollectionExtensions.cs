@@ -36,6 +36,7 @@ public static class OrionPatchServiceCollectionExtensions
         }
 
         services.TryAddSingleton<IOutboxDispatcherClock, SystemClock>();
+        services.TryAddSingleton(_ => Moongazing.OrionPatch.Configuration.MessageTypeRegistry.Empty);
         services.TryAddSingleton<MessageTypeNameResolver>();
         services.TryAddSingleton(sp =>
             new MessageSerializer(sp.GetRequiredService<IOptions<OrionPatchOptions>>().Value.JsonOptions));
