@@ -27,19 +27,21 @@ public sealed class MessageTypeRegistry
     private readonly FrozenDictionary<string, Type> logicalToClr;
 
     /// <summary>
-    /// Options the registry was built with, exposed so the enqueue and dispatch paths can
-    /// honour <see cref="MessageTypeRegistryOptions.AllowAssemblyQualifiedNameFallback"/>.
+    /// Whether the enqueue path may fall back to <see cref="Type.FullName"/> for unmapped
+    /// types. Snapshotted from <see cref="MessageTypeRegistryOptions.AllowAssemblyQualifiedNameFallback"/>
+    /// at construction time; cannot be mutated after the registry is built.
     /// </summary>
-    public MessageTypeRegistryOptions Options { get; }
+    public bool AllowAssemblyQualifiedNameFallback { get; }
 
     internal MessageTypeRegistry(
         IReadOnlyDictionary<Type, string> clrToLogical,
         IReadOnlyDictionary<string, Type> logicalToClr,
         MessageTypeRegistryOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
         this.clrToLogical = clrToLogical.ToFrozenDictionary();
         this.logicalToClr = logicalToClr.ToFrozenDictionary(StringComparer.Ordinal);
-        Options = options;
+        AllowAssemblyQualifiedNameFallback = options.AllowAssemblyQualifiedNameFallback;
     }
 
     /// <summary>

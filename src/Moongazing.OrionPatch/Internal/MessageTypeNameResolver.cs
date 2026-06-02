@@ -41,7 +41,7 @@ internal sealed class MessageTypeNameResolver
             return registered;
         }
 
-        if (!registry.Options.AllowAssemblyQualifiedNameFallback)
+        if (!registry.AllowAssemblyQualifiedNameFallback)
         {
             throw new InvalidOperationException(
                 $"No MessageTypeRegistry mapping is registered for {type.FullName ?? type.Name} " +

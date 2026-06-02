@@ -20,7 +20,23 @@ public sealed class MessageTypeRegistryTests
 
         Assert.Null(reg.ResolveLogicalName(typeof(OrderShipped)));
         Assert.Null(reg.ResolveClrType("anything"));
-        Assert.True(reg.Options.AllowAssemblyQualifiedNameFallback);
+        Assert.True(reg.AllowAssemblyQualifiedNameFallback);
+    }
+
+    [Fact]
+    public void Empty_registry_options_are_immutable_after_build()
+    {
+        // Guards against accidental mutation of the shared Empty singleton's behaviour.
+        // The registry snapshots the bool at construction, so external mutation of any
+        // options instance can never flip the global Empty's fallback flag.
+        var reg = MessageTypeRegistry.Empty;
+        Assert.True(reg.AllowAssemblyQualifiedNameFallback);
+
+        // Build a new registry with fallback disabled and verify Empty is unaffected.
+        _ = new MessageTypeRegistryBuilder()
+            .Configure(o => o.AllowAssemblyQualifiedNameFallback = false)
+            .Build();
+        Assert.True(MessageTypeRegistry.Empty.AllowAssemblyQualifiedNameFallback);
     }
 
     [Fact]
