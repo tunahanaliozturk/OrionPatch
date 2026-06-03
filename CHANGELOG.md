@@ -6,6 +6,42 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-01
+
+### Added
+
+- **`MessageTypeRegistry`** (public, in `Moongazing.OrionPatch.Configuration`). A bidirectional mapping between logical wire names (`"OrderShipped"`, `"OrderShipped.V2"`) and CLR types. Lets consumers rename or refactor message types without breaking in-flight outbox rows: the row keeps the logical name, and the registry resolves it back to a CLR type at dispatch time. Built via `MessageTypeRegistryBuilder` and surfaced via `services.AddOrionPatch().UseMessageTypeRegistry(r => r.Map<OrderShipped>("OrderShipped"))`. Backed by a `FrozenDictionary` so look-ups are allocation-free.
+- **`MessageTypeRegistryOptions.AllowAssemblyQualifiedNameFallback`** (default `true`). When enabled, unmapped CLR types fall back to `Type.FullName`. Set to `false` to require explicit mapping for every type the outbox sees; missing mappings then throw `InvalidOperationException` at enqueue time with a guidance message.
+
+### Changed
+
+- **`MessageTypeNameResolver`** consults the registry before falling back. Precedence is now: per-enqueue `OutboxEnqueueOptions.MessageType` override, then registered logical name, then `Type.FullName` (or throw, depending on the fallback option). The default registry is `MessageTypeRegistry.Empty`, so consumers that never call `.UseMessageTypeRegistry(...)` see identical behaviour to v0.1.x.
+
+### Deferred from v0.2.0
+
+The original v0.2.0 milestone listed five items. Four are de-scoped to keep this minor focused and reviewable:
+
+- **`IOutboxTenantResolver`** (multi-tenant outbox filtering) -> v0.2.1. Documented `Headers["tenant-id"]` workaround remains supported.
+- **`OrionPatch.Inbox`** (sibling storage primitive for consumer-side dedup) -> v0.2.2.
+- **`OrionPatch.RabbitMQ`** sink -> v0.2.3.
+- **`OrionPatch.AzureServiceBus`** sink -> v0.2.4.
+
+`ROADMAP.md` reflects the new targets.
+
+### Migration from v0.1.1
+
+Source-compatible. The default registration of `MessageTypeRegistry.Empty` plus the existing FullName fallback means consumers see no behaviour change until they opt in via `.UseMessageTypeRegistry(...)`. Existing outbox rows continue to dispatch under their FullName-based `MessageType`.
+
+To opt in:
+
+```csharp
+services.AddOrionPatch()
+    .UseChannelSink(...)
+    .UseMessageTypeRegistry(r => r
+        .Map<OrderShipped>("OrderShipped")
+        .Map<OrderShippedV2>("OrderShipped.V2"));
+```
+
 ## [0.1.1] - 2026-05-26
 
 ### Changed

@@ -16,8 +16,9 @@ If an item here matters to you, open a GitHub issue so we can weigh it against e
 
 ## Released
 
-*(Nothing shipped yet. v0.1.0 is in development; this section will list the v0.1.0
-feature set after first release.)*
+- **v0.1.0** (2026-05-24) - Initial public release. `IOutbox` + `IOutboxSink` + EF Core storage + retry / dead-letter / OpenTelemetry / in-process channel sink. Three NuGet packages: `OrionPatch`, `OrionPatch.EntityFrameworkCore`, `OrionPatch.Testing`.
+- **v0.1.1** (2026-05-26) - Logo refresh. No functional change.
+- **v0.2.0** (2026-06-01) - `MessageTypeRegistry` for schema-evolution-safe wire names + `MessageTypeRegistryOptions.AllowAssemblyQualifiedNameFallback`. Source-compatible.
 
 ---
 
@@ -50,26 +51,22 @@ OpenTelemetry.
 
 ---
 
-## v0.2.0 — Inbox & concrete broker sinks *(planned, Q4 2026)*
+## v0.2.0 — Schema-evolution helper *(shipped 2026-06-01)*
 
-The two largest "explicitly deferred" items from the v0.1.0 spec. Outbox without a
-matching inbox is a half-story for cross-service messaging; outbox without a real broker
-sink is a primitive looking for an integration.
+First slice of the v0.2.x line. Schema-evolution-safe wire names so consumers can rename
+or refactor message types without breaking in-flight outbox rows.
 
-- **`OrionPatch.Inbox`** — sibling storage primitive for consumer-side dedup. Same
-  family-style API as the outbox; provider-aware EF Core implementation; `IInboxFilter`
-  helper for wrapping a consumer pipeline so duplicate deliveries become no-ops.
-- **`OrionPatch.RabbitMQ`** — concrete `IOutboxSink` implementation with publisher
-  confirms, exchange/routing-key resolution from `MessageType` + `Headers`, and a
-  documented at-least-once contract.
-- **`OrionPatch.AzureServiceBus`** — concrete `IOutboxSink` implementation with session
-  support, deferred messages, and dead-letter integration with the broker's own DLQ.
-- **Schema-evolution helper** — opt-in `MessageTypeRegistry` for explicit type-name
-  mapping, plus a versioning convention (`Type.V2`) that survives renames without
-  breaking in-flight rows.
-- **Multi-tenant outbox filtering** — first-class `IOutboxTenantResolver` if v0.1.0
-  consumer feedback shows demand. Otherwise stays as the documented
-  `Headers["tenant-id"]` pattern.
+- **`MessageTypeRegistry`** - bidirectional logical-name <-> CLR-type mapping. Built via `MessageTypeRegistryBuilder` and registered with `services.AddOrionPatch().UseMessageTypeRegistry(...)`. Backed by a `FrozenDictionary` so look-ups are allocation-free.
+- **`MessageTypeRegistryOptions.AllowAssemblyQualifiedNameFallback`** (default `true`) - controls whether unmapped CLR types fall back to `Type.FullName` or throw.
+
+### Deferred from v0.2.0 to follow-up patches
+
+The original v0.2.0 milestone listed four other items. New targets:
+
+- **`IOutboxTenantResolver`** (multi-tenant outbox filtering) -> v0.2.1. The documented `Headers["tenant-id"]` workaround stays supported.
+- **`OrionPatch.Inbox`** (sibling storage primitive for consumer-side dedup) -> v0.2.2.
+- **`OrionPatch.RabbitMQ`** sink -> v0.2.3.
+- **`OrionPatch.AzureServiceBus`** sink -> v0.2.4.
 
 ---
 
