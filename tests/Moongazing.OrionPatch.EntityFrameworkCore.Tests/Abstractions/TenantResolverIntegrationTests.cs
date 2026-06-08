@@ -78,9 +78,18 @@ public sealed class TenantResolverIntegrationTests
     }
 
     [Fact]
-    public void Resolver_returning_null_or_empty_does_not_stamp_header()
+    public void Resolver_returning_null_does_not_stamp_header()
     {
         var (outbox, _) = NewOutbox(new DelegateOutboxTenantResolver(() => null));
+        outbox.Enqueue(new OrderShipped { Id = 1 });
+
+        Assert.Null(Headers(outbox));
+    }
+
+    [Fact]
+    public void Resolver_returning_empty_string_does_not_stamp_header()
+    {
+        var (outbox, _) = NewOutbox(new DelegateOutboxTenantResolver(() => string.Empty));
         outbox.Enqueue(new OrderShipped { Id = 1 });
 
         Assert.Null(Headers(outbox));
