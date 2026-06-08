@@ -36,6 +36,7 @@ public sealed class EfCoreOutbox : IOutbox
     private readonly DbContext db;
     private readonly MessageTypeNameResolver typeResolver;
     private readonly MessageSerializer serializer;
+    private readonly IOutboxTenantResolver tenantResolver;
     private readonly List<OutboxRow> buffer = new();
     private readonly List<OutboxRow> pendingFlush = new();
 
@@ -45,15 +46,24 @@ public sealed class EfCoreOutbox : IOutbox
     /// <param name="db">DbContext whose SaveChanges flushes the buffer; must be non-null.</param>
     /// <param name="typeResolver">Resolves the <c>MessageType</c> string for enqueued payloads; must be non-null.</param>
     /// <param name="serializer">JSON serializer for payloads; must be non-null.</param>
-    /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+    /// <param name="tenantResolver">
+    /// Resolves the ambient tenant identifier at enqueue time. Optional; defaults to
+    /// <see cref="NullOutboxTenantResolver"/> so the v0.2.0 behaviour is preserved when
+    /// nothing is registered.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Thrown when any required argument is null.</exception>
     /// <remarks>
     /// This constructor is internal. Consumers obtain an <see cref="IOutbox"/> instance
     /// via the DI registration shipped in <c>OrionPatch.EntityFrameworkCore</c>'s
-    /// <c>UseEntityFrameworkCore</c> helper (Task 7); the constructor accepts the bound
+    /// <c>UseEntityFrameworkCore</c> helper; the constructor accepts the bound
     /// <see cref="DbContext"/> + internal core helpers and is not part of the public
     /// contract.
     /// </remarks>
-    internal EfCoreOutbox(DbContext db, MessageTypeNameResolver typeResolver, MessageSerializer serializer)
+    internal EfCoreOutbox(
+        DbContext db,
+        MessageTypeNameResolver typeResolver,
+        MessageSerializer serializer,
+        IOutboxTenantResolver? tenantResolver = null)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(typeResolver);
@@ -61,6 +71,7 @@ public sealed class EfCoreOutbox : IOutbox
         this.db = db;
         this.typeResolver = typeResolver;
         this.serializer = serializer;
+        this.tenantResolver = tenantResolver ?? new NullOutboxTenantResolver();
 
         // AddOrUpdate handles the case where a previous outbox was bound to this DbContext
         // (e.g. resolved twice in a single scope). Last writer wins, matching scoped-DI semantics.
@@ -98,14 +109,30 @@ public sealed class EfCoreOutbox : IOutbox
         ArgumentNullException.ThrowIfNull(message);
 
         var occurredAt = options?.OccurredAtUtc ?? DateTime.UtcNow;
+
+        // Tenant stamping (v0.2.1): if the registered IOutboxTenantResolver yields a value AND
+        // the caller has not already supplied "tenant-id" in Headers, attach it. Caller
+        // wins on conflict so explicit per-enqueue overrides remain authoritative.
+        var headers = options?.Headers;
+        var ambientTenant = tenantResolver.Resolve();
+        if (!string.IsNullOrEmpty(ambientTenant)
+            && (headers is null || !headers.ContainsKey(IOutboxTenantResolver.TenantHeaderName)))
+        {
+            var merged = headers is null
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                : new Dictionary<string, string>(headers, StringComparer.Ordinal);
+            merged[IOutboxTenantResolver.TenantHeaderName] = ambientTenant!;
+            headers = merged;
+        }
+
         var row = new OutboxRow
         {
             Id = Guid.NewGuid(),
             MessageType = typeResolver.Resolve(typeof(T), options),
             Payload = serializer.Serialize(message),
-            HeadersJson = options?.Headers is null
+            HeadersJson = headers is null
                 ? null
-                : JsonSerializer.Serialize(options.Headers, serializer.Options),
+                : JsonSerializer.Serialize(headers, serializer.Options),
             CorrelationId = options?.CorrelationId,
             OccurredAtUtc = occurredAt,
             EnqueuedAtUtc = occurredAt,
