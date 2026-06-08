@@ -62,10 +62,13 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
 
         builder.Services.TryAddSingleton<OrionPatchSaveChangesInterceptor>();
 
+        builder.Services.TryAddSingleton<IOutboxTenantResolver, NullOutboxTenantResolver>();
+
         builder.Services.AddScoped(sp => new EfCoreOutbox(
             sp.GetRequiredService<TDbContext>(),
             sp.GetRequiredService<MessageTypeNameResolver>(),
-            sp.GetRequiredService<MessageSerializer>()));
+            sp.GetRequiredService<MessageSerializer>(),
+            sp.GetRequiredService<IOutboxTenantResolver>()));
         builder.Services.AddScoped<IOutbox>(sp => sp.GetRequiredService<EfCoreOutbox>());
 
         builder.Services.AddScoped(sp => new EfCoreOutboxStorage(
