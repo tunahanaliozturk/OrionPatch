@@ -6,6 +6,36 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-04
+
+### Added
+
+#### `IOutboxTenantResolver` ambient tenant capture
+
+- New `IOutboxTenantResolver` interface in `Moongazing.OrionPatch.Abstractions`. Single method `Resolve()` called per `IOutbox.Enqueue<T>` invocation to capture the ambient tenant identifier without forcing callers to pass `Headers["tenant-id"]` manually.
+- `NullOutboxTenantResolver` default registration: always returns null, so v0.2.0 behaviour is preserved when nothing is registered.
+- `DelegateOutboxTenantResolver(Func<string?>)` for consumers who already have a resolution function (closure over `IHttpContextAccessor`, ambient AsyncLocal, etc.) and do not want a one-off class.
+- Standard header key `IOutboxTenantResolver.TenantHeaderName = "tenant-id"`. Resolver-supplied tenants merge with caller-supplied `OutboxEnqueueOptions.Headers`; caller-supplied `Headers["tenant-id"]` wins on conflict so explicit per-enqueue overrides remain authoritative.
+- `EfCoreOutbox.Enqueue` consults the registered resolver. `UseEntityFrameworkCore` adds the default via `TryAddSingleton`, so opting in is a single `services.AddSingleton<IOutboxTenantResolver, ...>()` line before that call.
+
+### Deferred
+
+Remaining v0.2.x items continue with their previously published targets:
+
+- `OrionPatch.Inbox` (consumer-side dedup) -> v0.2.2
+- `OrionPatch.RabbitMQ` sink -> v0.2.3
+- `OrionPatch.AzureServiceBus` sink -> v0.2.4
+
+### Migration from v0.2.0
+
+Source-compatible. Opt in via:
+
+```csharp
+services.AddSingleton<IOutboxTenantResolver>(_ =>
+    new DelegateOutboxTenantResolver(() => HttpContext.Current?.User?.GetTenantId()));
+services.AddOrionPatch().UseEntityFrameworkCore<AppDbContext>();
+```
+
 ## [0.2.0] - 2026-06-01
 
 ### Added
