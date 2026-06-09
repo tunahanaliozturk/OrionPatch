@@ -6,6 +6,28 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-09
+
+### Added
+
+#### `IInbox` consumer-side dedup primitive
+
+- **`IInbox`** in `Moongazing.OrionPatch.Abstractions`. Single method `TryAcceptAsync(messageId, ct)` returns `true` on first delivery, `false` on duplicate. Concurrency contract: at most one caller for the same id observes `true`, even under parallel delivery.
+- **`InMemoryInbox`** in `Moongazing.OrionPatch.Channels` - `ConcurrentDictionary<Guid, byte>` backed implementation. Bounded by host RAM; intended for tests, demos, and single-instance services where dedup does not need to survive restart. `Count` and `Reset()` helpers exposed for fact runs in shared xunit collections.
+- **`InboxFilter`** wrapper - `InvokeIfFirstAsync(envelope, handler, ct)` runs a handler delegate only on first delivery so consumer broker pipelines can plug dedup in with one decorator instead of branching at every handler.
+
+### Deferred
+
+- **EF Core inbox storage** (`OrionPatch.EntityFrameworkCore` inbox table + storage interface) -> v0.2.3
+- **`OrionPatch.RabbitMQ`** sink -> v0.2.4 (was v0.2.3; renamed because EF inbox takes that slot)
+- **`OrionPatch.AzureServiceBus`** sink -> v0.2.5 (was v0.2.4)
+
+`ROADMAP.md` reflects the new sequence.
+
+### Migration from v0.2.1
+
+Source-compatible. The new types are additive; consumers wire dedup explicitly via `InboxFilter` or the raw `IInbox`. There is no auto-registration.
+
 ## [0.2.1] - 2026-06-04
 
 ### Added
