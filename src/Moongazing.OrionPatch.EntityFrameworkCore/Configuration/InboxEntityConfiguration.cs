@@ -10,7 +10,7 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 /// <c>Consumer</c> is null, the row keys on <c>MessageId</c> alone for the default
 /// single-consumer setup.
 /// </summary>
-internal sealed class InboxEntityConfiguration : IEntityTypeConfiguration<InboxRow>
+public sealed class InboxEntityConfiguration : IEntityTypeConfiguration<InboxRow>
 {
     public void Configure(EntityTypeBuilder<InboxRow> builder)
     {

@@ -30,8 +30,8 @@ Persists the v0.2.2 `IInbox` contract across process restarts.
 
 Source-compatible. Adopt the new inbox storage by:
 
-1. Apply `InboxEntityConfiguration` to your DbContext's `OnModelCreating` (or add `DbSet<InboxRow>` and let EF Core discover it).
-2. Add a column migration for `OrionPatch_Inbox`.
+1. Call `modelBuilder.ApplyOrionPatchConfiguration()` from your DbContext's `OnModelCreating` (the helper now applies both `OutboxEntityConfiguration` and `InboxEntityConfiguration`; the latter is also `public` so consumers can apply it directly).
+2. Add and apply an EF Core migration that creates the `OrionPatch_Inbox` table.
 3. Register: `services.AddOrionPatch().UseEntityFrameworkCore<AppDbContext>().UseEntityFrameworkCoreInbox<AppDbContext>();`
 
 Consumers staying on v0.2.2's in-memory inbox see no behaviour change.

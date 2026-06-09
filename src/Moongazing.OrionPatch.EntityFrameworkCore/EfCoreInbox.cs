@@ -62,11 +62,28 @@ public sealed class EfCoreInbox : IInbox
         }
         catch (DbUpdateException)
         {
-            // Persisted-row conflict: another instance / connection beat us. Detach our
-            // failed insert so the change tracker does not keep trying to persist it.
-            var entry = db.Entry(row);
-            entry.State = EntityState.Detached;
-            return false;
+            // Detach the failed insert so the change tracker does not retry it on subsequent
+            // SaveChanges calls.
+            db.Entry(row).State = EntityState.Detached;
+
+            // Determine whether this was actually a duplicate-key conflict or a different
+            // persistence failure (missing table, schema mismatch, connection error). We
+            // query for the row's existence: if it now exists, the failure was a duplicate
+            // and we report "already seen". Otherwise it was a genuine storage failure and
+            // the caller MUST see the exception so the message is not silently dropped.
+            var exists = await db.Set<InboxRow>()
+                .AsNoTracking()
+                .AnyAsync(
+                    r => r.MessageId == messageId && r.Consumer == consumerKey,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (exists)
+            {
+                return false;
+            }
+
+            throw;
         }
     }
 }

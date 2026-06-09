@@ -104,6 +104,20 @@ public sealed class EfCoreInboxTests : IDisposable
         Assert.Equal(pinned.UtcDateTime, row.AcceptedAtUtc);
     }
 
+    [Fact]
+    public async Task Persistence_failure_unrelated_to_uniqueness_rethrows()
+    {
+        // Drop the inbox table to simulate a missing-table / schema-mismatch scenario. The
+        // first TryAcceptAsync hits a DbUpdateException; the existence query also fails, so
+        // the original exception MUST propagate to the caller instead of being silently
+        // classified as a duplicate.
+        await context.Database.ExecuteSqlRawAsync("DROP TABLE OrionPatch_Inbox");
+        IInbox inbox = new EfCoreInbox(context);
+
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => inbox.TryAcceptAsync(Guid.NewGuid(), CancellationToken.None).AsTask());
+    }
+
     private sealed class PinnedTimeProvider : TimeProvider
     {
         private readonly DateTimeOffset now;
