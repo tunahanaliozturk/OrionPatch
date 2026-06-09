@@ -59,10 +59,19 @@ public sealed class InboxTests
     {
         var inbox = new InMemoryInbox();
         var id = Guid.NewGuid();
+        using var start = new ManualResetEventSlim(initialState: false);
 
-        var tasks = Enumerable.Range(0, 64).Select(_ =>
-            inbox.TryAcceptAsync(id, CancellationToken.None).AsTask()).ToArray();
+        // Wrap each call in Task.Run with a barrier so the racing TryAcceptAsync calls
+        // actually hit the ConcurrentDictionary in parallel on the thread pool. Without
+        // the barrier the LINQ Select would invoke the synchronous ValueTask.FromResult
+        // calls serially and the dedup contention would never be observed.
+        var tasks = Enumerable.Range(0, 64).Select(_ => Task.Run(async () =>
+        {
+            start.Wait();
+            return await inbox.TryAcceptAsync(id, CancellationToken.None);
+        })).ToArray();
 
+        start.Set();
         await Task.WhenAll(tasks);
 
         Assert.Equal(1, tasks.Count(t => t.Result));
