@@ -6,6 +6,36 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-09
+
+### Added
+
+#### EF Core inbox storage in `Moongazing.OrionPatch.EntityFrameworkCore`
+
+Persists the v0.2.2 `IInbox` contract across process restarts.
+
+- **`InboxRow`** entity: `MessageId` (Guid) + `Consumer` (string, nullable, max 128 chars) + `AcceptedAtUtc` (UTC DateTime). Maps to table `OrionPatch_Inbox`.
+- **`InboxEntityConfiguration`** EF Core mapping with composite primary key on (`MessageId`, `Consumer`) so a single inbox table can serve multiple consumers without one consumer's accepted-set masking another's.
+- **`EfCoreInbox`** implementation: change-tracker fast-path detects same-DbContext duplicates without throwing, then attempts the insert and catches `DbUpdateException` as "another connection beat us to it". Detaches the failed entry so the change tracker does not retry it on subsequent `SaveChanges` calls.
+- **`InboxBuilderExtensions.UseEntityFrameworkCoreInbox<TDbContext>(consumer?)`** DI helper. Replaces any prior `IInbox` registration (including the v0.2.2 `InMemoryInbox` default) and registers `EfCoreInbox` as scoped so it shares the DbContext lifetime.
+
+### Deferred
+
+- `OrionPatch.RabbitMQ` sink -> v0.2.4 (was v0.2.4, unchanged)
+- `OrionPatch.AzureServiceBus` sink -> v0.2.5 (was v0.2.5, unchanged)
+
+`ROADMAP.md` reflects the targets.
+
+### Migration from v0.2.2
+
+Source-compatible. Adopt the new inbox storage by:
+
+1. Call `modelBuilder.ApplyOrionPatchConfiguration()` from your DbContext's `OnModelCreating` (the helper now applies both `OutboxEntityConfiguration` and `InboxEntityConfiguration`; the latter is also `public` so consumers can apply it directly).
+2. Add and apply an EF Core migration that creates the `OrionPatch_Inbox` table.
+3. Register: `services.AddOrionPatch().UseEntityFrameworkCore<AppDbContext>().UseEntityFrameworkCoreInbox<AppDbContext>();`
+
+Consumers staying on v0.2.2's in-memory inbox see no behaviour change.
+
 ## [0.2.2] - 2026-06-09
 
 ### Added
