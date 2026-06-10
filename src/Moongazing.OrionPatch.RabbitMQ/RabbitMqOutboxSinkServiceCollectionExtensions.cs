@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Moongazing.OrionPatch.Abstractions;
 using RabbitMQ.Client;
 
@@ -42,7 +43,12 @@ public static class RabbitMqOutboxSinkServiceCollectionExtensions
                 var factory = new ConnectionFactory
                 {
                     Uri = new Uri(connString),
-                    DispatchConsumersAsync = false,
+                    // DispatchConsumersAsync MUST be true so the AsyncEventingBasicConsumer
+                    // used by RabbitMqOutboxConsumer (v0.2.5) raises Received as an async
+                    // event. With this flag false, the async handler runs on the
+                    // synchronous dispatch loop and any await inside it deadlocks the
+                    // consumer; the sink path is unaffected either way.
+                    DispatchConsumersAsync = true,
                 };
                 return factory.CreateConnection();
             });
@@ -50,6 +56,39 @@ public static class RabbitMqOutboxSinkServiceCollectionExtensions
 
         services.AddSingleton<IOutboxSink, RabbitMqOutboxSink>();
 
+        return services;
+    }
+
+    /// <summary>
+    /// Register the <see cref="RabbitMqOutboxConsumer"/> hosted service alongside an
+    /// <typeparamref name="THandler"/> that handles each first-delivery envelope. The
+    /// handler is registered scoped so it can take scoped collaborators (DbContext,
+    /// repositories) as constructor parameters; each delivery uses a fresh scope.
+    /// </summary>
+    /// <remarks>
+    /// PREREQUISITE: an <see cref="IConnection"/> must already be registered in DI. The
+    /// recommended path is to call <see cref="AddOrionPatchRabbitMqSink"/> first with a
+    /// connection string (which auto-wires the connection with
+    /// <c>DispatchConsumersAsync = true</c>, which the async consumer needs); alternatively
+    /// register your own <see cref="IConnection"/> singleton and ensure its underlying
+    /// <see cref="ConnectionFactory.DispatchConsumersAsync"/> is true, otherwise the
+    /// AsyncEventingBasicConsumer's async event handler deadlocks the dispatch loop.
+    /// </remarks>
+    /// <typeparam name="THandler">Consumer-supplied handler.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">Consumer configuration callback.</param>
+    /// <returns>The same <paramref name="services"/> for chaining.</returns>
+    public static IServiceCollection AddOrionPatchRabbitMqConsumer<THandler>(
+        this IServiceCollection services,
+        Action<RabbitMqOutboxConsumerOptions> configure)
+        where THandler : class, IOrionPatchMessageHandler
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        services.Configure(configure);
+        services.AddScoped<IOrionPatchMessageHandler, THandler>();
+        services.AddHostedService<RabbitMqOutboxConsumer>();
         return services;
     }
 }

@@ -65,7 +65,7 @@ The original v0.2.0 milestone listed four other items. New targets:
 
 - **`IOutboxTenantResolver`** (multi-tenant outbox filtering) -> v0.2.1. The documented `Headers["tenant-id"]` workaround stays supported.
 - **`OrionPatch.Inbox`** (sibling storage primitive for consumer-side dedup) -> v0.2.2.
-- **`OrionPatch.RabbitMQ`** sink (publisher path) -> v0.2.4 (shipped 2026-06-10); consumer / subscription side -> v0.2.5.
+- **`OrionPatch.RabbitMQ`** sink (publisher path) -> v0.2.4 (shipped 2026-06-10); consumer / subscription side -> v0.2.5 (shipped 2026-06-10).
 - **`OrionPatch.AzureServiceBus`** sink -> v0.2.6 (bumped one minor to make room for the RabbitMQ consumer).
 
 ---

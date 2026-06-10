@@ -6,6 +6,47 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-10
+
+### Added
+
+#### `Moongazing.OrionPatch.RabbitMQ` consumer / subscription side
+
+Lands the v0.2.4 deferral. Pairs with the v0.2.4 publisher path so a single package now provides end-to-end RabbitMQ wiring (publisher confirms on the way out; inbox-deduped delivery on the way in).
+
+- **`RabbitMqOutboxConsumer`** `BackgroundService` drains the configured queue, decodes each AMQP delivery into an `OutboxEnvelope` (envelope id from the `orionpatch-envelope-id` header stamped by v0.2.4's `RabbitMqOutboxSink`), deduplicates via the registered `IInbox`, and invokes `IOrionPatchMessageHandler` for first deliveries only. ACK on success / duplicate ACK; NACK on handler exception.
+- **Per-delivery scope**: each delivery resolves `IOrionPatchMessageHandler` and `IInbox` from a fresh `IServiceScope` so scoped collaborators (DbContext, repositories) behave as if served by an HTTP request. The scope is disposed inline with ACK / NACK.
+- **QoS**: `RabbitMqOutboxConsumerOptions.PrefetchCount` (default 8) maps to `BasicQos(0, n, false)` so the broker does not push more than `n` un-acked deliveries to one consumer at a time. Tune up for low-latency / high-throughput handlers; tune down when handler latency is high so a slow consumer does not hog the queue.
+- **Failure / requeue**: `RequeueOnFailure` (default `true`) controls the NACK `requeue` flag. Set false when paired with a dead-letter exchange so failures are captured for operator review instead of looping.
+- **Duplicates**: `AckDuplicates` (default `true`) ACKs duplicates as a silent no-op; set false to NACK without requeue so the broker removes them via a configured DLX.
+- **Missing envelope id** (delivery with no `orionpatch-envelope-id` header) is NACKed without requeue so an operator can inspect via DLQ; the consumer never silently drops a message it cannot dedupe.
+- **`AddOrionPatchRabbitMqConsumer<THandler>(configure)`** DI helper registers the hosted service plus a scoped `IOrionPatchMessageHandler` binding.
+
+### Tests
+
+9 new `RabbitMqOutboxConsumerTests` facts (3 TFM): first delivery invokes + ACKs, duplicate ACKs without invoking, `AckDuplicates=false` NACKs without requeue, missing envelope id NACKs without requeue, handler exception NACKs with requeue by default, `RequeueOnFailure=false` NACKs without requeue, `BasicQos` set to configured prefetch, caller-supplied headers propagate excluding `orionpatch-*`, `AddOrionPatchRabbitMqConsumer` registers handler scoped (distinct instances per scope). 27 facts total in the RabbitMQ test suite (9 consumer + 10 v0.2.4 sink + 8 v0.2.4 sink supporting cases).
+
+### Deferred
+
+- **`OrionPatch.AzureServiceBus`** sink -> v0.2.6 (unchanged target)
+
+### Migration from v0.2.4
+
+Source-compatible. The consumer is an opt-in add-on registered alongside the v0.2.4 sink:
+
+```csharp
+services.AddOrionPatchRabbitMqSink(o =>
+{
+    o.ConnectionString = "amqp://guest:guest@localhost:5672/";
+    o.ExchangeName = "orders";
+});
+services.AddOrionPatchRabbitMqConsumer<MyOrderHandler>(o =>
+{
+    o.QueueName = "orders.processor";
+    o.PrefetchCount = 16;
+});
+```
+
 ## [0.2.4] - 2026-06-10
 
 ### Added

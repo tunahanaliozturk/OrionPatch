@@ -23,6 +23,14 @@ public sealed class InMemoryInbox : IInbox
         return ValueTask.FromResult(seen.TryAdd(messageId, 0));
     }
 
+    /// <inheritdoc />
+    public ValueTask RollbackAsync(Guid messageId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        seen.TryRemove(messageId, out _);
+        return default;
+    }
+
     /// <summary>
     /// Test-only helper that returns the number of distinct message ids the inbox has accepted.
     /// </summary>
