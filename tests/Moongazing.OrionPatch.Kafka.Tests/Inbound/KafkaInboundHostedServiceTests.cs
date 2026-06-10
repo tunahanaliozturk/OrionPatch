@@ -92,6 +92,7 @@ public sealed class KafkaInboundHostedServiceTests
         var collection = new ServiceCollection();
         collection.AddSingleton<IInbox>(inbox);
         collection.AddSingleton<IKafkaInboundHandler>(handler);
+        collection.AddSingleton<IKafkaAttemptCountStore, InMemoryKafkaAttemptCountStore>();
         var sp = collection.BuildServiceProvider();
 
         var options = Options.Create(new KafkaInboxOptions
@@ -269,6 +270,7 @@ public sealed class KafkaInboundHostedServiceTests
         collection.AddSingleton<IInbox>(inbox);
         collection.AddSingleton<IKafkaInboundHandler>(handler);
         collection.AddSingleton<IKafkaInboundDeadLetterProducer>(dlqProducer);
+        collection.AddSingleton<IKafkaAttemptCountStore, InMemoryKafkaAttemptCountStore>();
         using var sp = collection.BuildServiceProvider();
         var options = Options.Create(new KafkaInboxOptions
         {
@@ -303,6 +305,113 @@ public sealed class KafkaInboundHostedServiceTests
             Topics = Array.Empty<string>(),
         });
         Assert.Throws<InvalidOperationException>(() => new DefaultKafkaConsumerFactory(opts));
+    }
+
+    private sealed class RecordingAttemptStore : IKafkaAttemptCountStore
+    {
+        public Dictionary<Guid, int> Stored { get; } = new();
+        public List<Guid> Cleared { get; } = new();
+        public ValueTask<int> GetAsync(Guid envelopeId, CancellationToken ct)
+            => ValueTask.FromResult(Stored.TryGetValue(envelopeId, out var v) ? v : 0);
+        public ValueTask SetAsync(Guid envelopeId, int attemptCount, CancellationToken ct)
+        {
+            Stored[envelopeId] = attemptCount;
+            return default;
+        }
+        public ValueTask ClearAsync(Guid envelopeId, CancellationToken ct)
+        {
+            Stored.Remove(envelopeId);
+            Cleared.Add(envelopeId);
+            return default;
+        }
+    }
+
+    [Fact]
+    public async Task Persists_attempt_count_on_handler_failure_and_clears_on_success()
+    {
+        var envelopeId = Guid.NewGuid();
+        var factory = new ScriptedConsumerFactory(new[]
+        {
+            Record(envelopeId, offset: 1),
+            Record(envelopeId, offset: 2),
+        });
+        var inbox = new StubInbox();
+        var store = new RecordingAttemptStore();
+        var failOnce = true;
+        var handler = new RecordingHandler
+        {
+            Behaviour = _ =>
+            {
+                if (failOnce)
+                {
+                    failOnce = false;
+                    throw new InvalidOperationException("first attempt fails");
+                }
+                return Task.CompletedTask;
+            },
+        };
+
+        var collection = new ServiceCollection();
+        collection.AddSingleton<IInbox>(inbox);
+        collection.AddSingleton<IKafkaInboundHandler>(handler);
+        collection.AddSingleton<IKafkaAttemptCountStore>(store);
+        using var sp = collection.BuildServiceProvider();
+        var options = Options.Create(new KafkaInboxOptions
+        {
+            BootstrapServers = "x",
+            GroupId = "g",
+            Topics = new[] { "orders" },
+            PollTimeout = TimeSpan.FromMilliseconds(50),
+        });
+        var svc = new KafkaInboundHostedService(
+            factory, options, sp.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<KafkaInboundHostedService>.Instance);
+
+        await RunUntilDrainedAsync(svc, factory, until: () => store.Cleared.Contains(envelopeId));
+
+        Assert.Contains(envelopeId, store.Cleared);
+        Assert.False(store.Stored.ContainsKey(envelopeId));
+    }
+
+    [Fact]
+    public async Task DLQ_uses_persisted_attempt_count_across_restarts()
+    {
+        // Pre-seed the store to simulate a restart after 4 prior failures - the next
+        // failure (attempt 5) should route to the DLQ even though the in-memory counter
+        // started at 0 this run.
+        var envelopeId = Guid.NewGuid();
+        var factory = new ScriptedConsumerFactory(new[] { Record(envelopeId, offset: 7) });
+        var inbox = new StubInbox();
+        var store = new RecordingAttemptStore();
+        store.Stored[envelopeId] = 4;
+        var dlqProducer = new CapturingDlqProducer();
+        var handler = new RecordingHandler { Behaviour = _ => throw new InvalidOperationException("boom") };
+
+        var collection = new ServiceCollection();
+        collection.AddSingleton<IInbox>(inbox);
+        collection.AddSingleton<IKafkaInboundHandler>(handler);
+        collection.AddSingleton<IKafkaAttemptCountStore>(store);
+        collection.AddSingleton<IKafkaInboundDeadLetterProducer>(dlqProducer);
+        using var sp = collection.BuildServiceProvider();
+        var options = Options.Create(new KafkaInboxOptions
+        {
+            BootstrapServers = "x",
+            GroupId = "g",
+            Topics = new[] { "orders" },
+            PollTimeout = TimeSpan.FromMilliseconds(50),
+            DeadLetterTopic = "orders.dlq",
+            MaxDeliveryAttempts = 5,
+        });
+        var svc = new KafkaInboundHostedService(
+            factory, options, sp.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<KafkaInboundHostedService>.Instance);
+
+        await RunUntilDrainedAsync(svc, factory, until: () => dlqProducer.Produced.Count >= 1);
+
+        Assert.Single(dlqProducer.Produced);
+        var attempts = Encoding.UTF8.GetString(
+            dlqProducer.Produced[0].Message.Headers.GetLastBytes("orionpatch-dlq-attempt-count"));
+        Assert.Equal("5", attempts);
     }
 
     [Fact]
