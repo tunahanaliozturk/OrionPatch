@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Moongazing.OrionPatch.Abstractions;
 using RabbitMQ.Client;
 
@@ -50,6 +51,30 @@ public static class RabbitMqOutboxSinkServiceCollectionExtensions
 
         services.AddSingleton<IOutboxSink, RabbitMqOutboxSink>();
 
+        return services;
+    }
+
+    /// <summary>
+    /// Register the <see cref="RabbitMqOutboxConsumer"/> hosted service alongside an
+    /// <typeparamref name="THandler"/> that handles each first-delivery envelope. The
+    /// handler is registered scoped so it can take scoped collaborators (DbContext,
+    /// repositories) as constructor parameters; each delivery uses a fresh scope.
+    /// </summary>
+    /// <typeparam name="THandler">Consumer-supplied handler.</typeparam>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">Consumer configuration callback.</param>
+    /// <returns>The same <paramref name="services"/> for chaining.</returns>
+    public static IServiceCollection AddOrionPatchRabbitMqConsumer<THandler>(
+        this IServiceCollection services,
+        Action<RabbitMqOutboxConsumerOptions> configure)
+        where THandler : class, IOrionPatchMessageHandler
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        services.Configure(configure);
+        services.AddScoped<IOrionPatchMessageHandler, THandler>();
+        services.AddHostedService<RabbitMqOutboxConsumer>();
         return services;
     }
 }
