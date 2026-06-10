@@ -6,6 +6,26 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-06-11
+
+### Added
+
+#### `IKafkaAttemptCountStore` persistence hook
+
+v0.2.9 introduced DLQ routing but kept the per-envelope attempt counter in memory only - a consumer restart reset the count and a poison-pill envelope could escape DLQ routing by surviving across restarts. v0.2.10 lets the consumer register a persistent store so the counter survives restarts and DLQ routing becomes restart-survivable.
+
+- `IKafkaAttemptCountStore` abstraction: `GetAsync`, `SetAsync`, `ClearAsync`.
+- `InMemoryKafkaAttemptCountStore` default implementation (preserves the v0.2.9 best-effort behaviour) registered automatically by `AddOrionPatchKafkaInbox` via `TryAddSingleton` so consumers wiring an EF Core / Redis-backed store win without explicit removal.
+- The hosted service now reads the previous attempt count from the store at the start of failure handling and persists the updated count before evaluating `MaxDeliveryAttempts`. On successful handle / DLQ routing the store is cleared so a future re-delivery starts at 0 again.
+
+### Tests
+
+2 new facts: attempt count persisted on failure + cleared on success, DLQ uses persisted attempt count across simulated restarts. 23 facts (x3 TFM).
+
+### Migration from v0.2.9
+
+Source-compatible. Default in-memory store preserves v0.2.9 behaviour.
+
 ## [0.2.9] - 2026-06-11
 
 ### Added
