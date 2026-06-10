@@ -1,0 +1,55 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Moongazing.OrionPatch.Abstractions;
+using RabbitMQ.Client;
+
+namespace Moongazing.OrionPatch.RabbitMQ;
+
+/// <summary>
+/// DI helpers for the RabbitMQ publisher sink.
+/// </summary>
+public static class RabbitMqOutboxSinkServiceCollectionExtensions
+{
+    /// <summary>
+    /// Register <see cref="RabbitMqOutboxSink"/> as the singleton
+    /// <see cref="IOutboxSink"/>. When <see cref="RabbitMqOutboxSinkOptions.ConnectionString"/>
+    /// is set, the helper also registers a singleton <see cref="IConnection"/> built from
+    /// that connection string; otherwise the caller must register an <see cref="IConnection"/>
+    /// themselves (e.g., for connection sharing across multiple sinks or for an existing
+    /// RabbitMQ.Client wiring).
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">Configuration callback.</param>
+    /// <returns>The same <paramref name="services"/> for chaining.</returns>
+    public static IServiceCollection AddOrionPatchRabbitMqSink(
+        this IServiceCollection services,
+        Action<RabbitMqOutboxSinkOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configure);
+
+        services.Configure(configure);
+
+        // Probe options for a connection string. If supplied, the helper wires a
+        // ConnectionFactory-backed singleton IConnection; otherwise we trust the caller.
+        var probe = new RabbitMqOutboxSinkOptions();
+        configure(probe);
+        if (!string.IsNullOrWhiteSpace(probe.ConnectionString))
+        {
+            var connString = probe.ConnectionString;
+            services.TryAddSingleton<IConnection>(_ =>
+            {
+                var factory = new ConnectionFactory
+                {
+                    Uri = new Uri(connString),
+                    DispatchConsumersAsync = false,
+                };
+                return factory.CreateConnection();
+            });
+        }
+
+        services.AddSingleton<IOutboxSink, RabbitMqOutboxSink>();
+
+        return services;
+    }
+}
