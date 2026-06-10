@@ -30,4 +30,22 @@ public sealed class KafkaInboxOptions
     /// hot-spinning under sustained broker / auth failures.
     /// </summary>
     public TimeSpan ConsumeRetryBackoff { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Optional dead-letter topic. When set, the inbound service routes a message to this
+    /// topic AFTER the handler has failed <see cref="MaxDeliveryAttempts"/> times instead
+    /// of indefinitely redelivering. The routed Kafka record carries the original record's
+    /// headers + key + value plus diagnostic <c>orionpatch-dlq-*</c> headers (reason,
+    /// original-topic, original-partition, original-offset, attempt count). Leave null to
+    /// disable DLQ routing (the v0.2.8 behaviour: redeliver forever).
+    /// </summary>
+    public string? DeadLetterTopic { get; set; }
+
+    /// <summary>
+    /// Maximum number of times the inbound service will re-attempt a record before
+    /// routing it to <see cref="DeadLetterTopic"/>. Default 5. The counter is kept in
+    /// memory (per envelope id) and resets on consumer restart - DLQ routing is a
+    /// best-effort poison-pill protection, not a transactional guarantee.
+    /// </summary>
+    public int MaxDeliveryAttempts { get; set; } = 5;
 }

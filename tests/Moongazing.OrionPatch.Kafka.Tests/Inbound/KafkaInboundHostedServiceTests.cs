@@ -239,6 +239,60 @@ public sealed class KafkaInboundHostedServiceTests
         }
     }
 
+    private sealed class CapturingDlqProducer : IKafkaInboundDeadLetterProducer
+    {
+        public List<(string Topic, Message<string, byte[]> Message)> Produced { get; } = new();
+        public Task ProduceAsync(string topic, Message<string, byte[]> message, CancellationToken ct)
+        {
+            Produced.Add((topic, message));
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Routes_to_dead_letter_topic_after_MaxDeliveryAttempts_failures()
+    {
+        var envelopeId = Guid.NewGuid();
+        var factory = new ScriptedConsumerFactory(new[]
+        {
+            Record(envelopeId, offset: 1),
+            Record(envelopeId, offset: 2),
+            Record(envelopeId, offset: 3),
+        });
+        var inbox = new StubInbox();
+        var dlqProducer = new CapturingDlqProducer();
+        var handler = new RecordingHandler
+        {
+            Behaviour = _ => throw new InvalidOperationException("boom"),
+        };
+        var collection = new ServiceCollection();
+        collection.AddSingleton<IInbox>(inbox);
+        collection.AddSingleton<IKafkaInboundHandler>(handler);
+        collection.AddSingleton<IKafkaInboundDeadLetterProducer>(dlqProducer);
+        using var sp = collection.BuildServiceProvider();
+        var options = Options.Create(new KafkaInboxOptions
+        {
+            BootstrapServers = "x",
+            GroupId = "g",
+            Topics = new[] { "orders" },
+            PollTimeout = TimeSpan.FromMilliseconds(50),
+            DeadLetterTopic = "orders.dlq",
+            MaxDeliveryAttempts = 3,
+        });
+        var svc = new KafkaInboundHostedService(
+            factory, options, sp.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<KafkaInboundHostedService>.Instance);
+
+        await RunUntilDrainedAsync(svc, factory, until: () => dlqProducer.Produced.Count >= 1);
+
+        var produced = Assert.Single(dlqProducer.Produced);
+        Assert.Equal("orders.dlq", produced.Topic);
+        var origTopic = Encoding.UTF8.GetString(produced.Message.Headers.GetLastBytes("orionpatch-dlq-original-topic"));
+        var attempts = Encoding.UTF8.GetString(produced.Message.Headers.GetLastBytes("orionpatch-dlq-attempt-count"));
+        Assert.Equal("orders", origTopic);
+        Assert.Equal("3", attempts);
+    }
+
     [Fact]
     public void DefaultKafkaConsumerFactory_rejects_empty_Topics()
     {

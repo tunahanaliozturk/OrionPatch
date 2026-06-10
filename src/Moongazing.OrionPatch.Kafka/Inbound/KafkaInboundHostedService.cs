@@ -32,10 +32,16 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
         Message = "Kafka inbound received a record without an orionpatch-envelope-id header on topic {Topic} partition {Partition} offset {Offset}; dropping and committing")]
     private partial void LogMissingEnvelopeId(string topic, int partition, long offset);
 
+    [LoggerMessage(EventId = 5, Level = LogLevel.Warning,
+        Message = "Kafka inbound routed envelope {EnvelopeId} to dead-letter topic '{DlqTopic}' after {Attempts} failed attempts (original topic {OriginalTopic} partition {OriginalPartition} offset {OriginalOffset}); committing original")]
+    private partial void LogDeadLettered(Guid envelopeId, string dlqTopic, int attempts, string originalTopic, int originalPartition, long originalOffset);
+
     private readonly IKafkaConsumerFactory factory;
     private readonly KafkaInboxOptions options;
     private readonly IServiceScopeFactory scopeFactory;
     private readonly ILogger<KafkaInboundHostedService> logger;
+    // Per-envelope attempt counter. Best-effort: in-memory only, resets on restart.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, int> attempts = new();
 
     public KafkaInboundHostedService(
         IKafkaConsumerFactory factory,
@@ -149,6 +155,7 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
         try
         {
             await handler.HandleAsync(message, stoppingToken).ConfigureAwait(false);
+            attempts.TryRemove(envelopeId, out _);
             TryCommit(consumer, result);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -162,16 +169,83 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            // Handler failure: roll the inbox back so the redelivery is not silently
-            // suppressed as a duplicate. The offset is NOT committed AND the partition
-            // is SEEKed back to this offset so the NEXT successful record in the same
-            // partition does not commit past the failed one - without the seek a later
-            // success in the same partition would commit a higher offset and the failed
-            // message would be permanently skipped.
+            var attemptCount = attempts.AddOrUpdate(envelopeId, 1, (_, current) => current + 1);
             await inbox.RollbackAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
             LogHandlerFailed(envelopeId, topic, partition, offset, ex);
+
+            // v0.2.9: route to the dead-letter topic when the message has failed
+            // MaxDeliveryAttempts times. The poison-pill protection is best-effort
+            // because the attempt counter lives in memory only; a consumer restart
+            // resets it. Production deployments wanting a stronger guarantee use a
+            // persisted attempt store (e.g. via the IInbox extension point).
+            if (!string.IsNullOrEmpty(options.DeadLetterTopic)
+                && attemptCount >= options.MaxDeliveryAttempts)
+            {
+                if (await TryDeadLetterAsync(envelopeId, result, attemptCount, ex, stoppingToken).ConfigureAwait(false))
+                {
+                    attempts.TryRemove(envelopeId, out _);
+                    LogDeadLettered(envelopeId, options.DeadLetterTopic!, attemptCount, topic, partition, offset);
+                    TryCommit(consumer, result);
+                    return;
+                }
+                // DLQ produce failed - fall through to the standard seek+redeliver path.
+            }
             TrySeek(consumer, result);
         }
+    }
+
+    private async Task<bool> TryDeadLetterAsync(
+        Guid envelopeId,
+        ConsumeResult<string, byte[]> source,
+        int attemptCount,
+        Exception cause,
+        CancellationToken stoppingToken)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var producer = scope.ServiceProvider.GetService<IKafkaInboundDeadLetterProducer>()
+                          ?? new NoopDeadLetterProducer();
+            var dlqRecord = new Message<string, byte[]>
+            {
+                Key = source.Message.Key,
+                Value = source.Message.Value,
+                Headers = CloneHeadersWithDlqMetadata(source, attemptCount, cause),
+            };
+            await producer.ProduceAsync(options.DeadLetterTopic!, dlqRecord, stoppingToken).ConfigureAwait(false);
+            return producer is not NoopDeadLetterProducer;
+        }
+#pragma warning disable CA1031
+        catch
+#pragma warning restore CA1031
+        {
+            return false;
+        }
+    }
+
+    private static Headers CloneHeadersWithDlqMetadata(
+        ConsumeResult<string, byte[]> source, int attempts, Exception cause)
+    {
+        var headers = new Headers();
+        if (source.Message.Headers is not null)
+        {
+            foreach (var h in source.Message.Headers)
+            {
+                headers.Add(h.Key, h.GetValueBytes());
+            }
+        }
+        headers.Add("orionpatch-dlq-original-topic", Encoding.UTF8.GetBytes(source.Topic));
+        headers.Add("orionpatch-dlq-original-partition", Encoding.UTF8.GetBytes(source.Partition.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        headers.Add("orionpatch-dlq-original-offset", Encoding.UTF8.GetBytes(source.Offset.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        headers.Add("orionpatch-dlq-attempt-count", Encoding.UTF8.GetBytes(attempts.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        headers.Add("orionpatch-dlq-reason", Encoding.UTF8.GetBytes(cause.GetType().FullName ?? "Exception"));
+        return headers;
+    }
+
+    private sealed class NoopDeadLetterProducer : IKafkaInboundDeadLetterProducer
+    {
+        public Task ProduceAsync(string topic, Message<string, byte[]> message, CancellationToken ct)
+            => Task.CompletedTask;
     }
 
     private static void TryCommit(IConsumer<string, byte[]> consumer, ConsumeResult<string, byte[]> result)
