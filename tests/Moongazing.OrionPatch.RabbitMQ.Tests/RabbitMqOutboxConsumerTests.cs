@@ -196,6 +196,34 @@ public sealed class RabbitMqOutboxConsumerTests
     }
 
     [Fact]
+    public async Task Handler_exception_rolls_back_inbox_so_redelivery_is_re_attempted()
+    {
+        // CRITICAL regression test: without rollback the inbox would treat the redelivery
+        // as a duplicate and silently skip the handler. The failed message would be
+        // permanently lost between the broker's redelivery semantics and the inbox's
+        // dedup. This test seeds an envelope id, has the handler throw on first delivery,
+        // and verifies the SAME id reaches the handler on a second delivery.
+        var (sut, _, broker, handler, _) = BuildAndStart();
+        var id = Guid.NewGuid();
+        handler.ThrowOnHandle = new InvalidOperationException("boom");
+
+        await broker.HandleBasicDeliver("tag", 20, false, "x", "rk", Delivery(20, id).BasicProperties,
+            new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("{}")));
+
+        Assert.Empty(handler.Received); // first attempt threw
+
+        // Simulate redelivery: same envelope id, handler now succeeds.
+        handler.ThrowOnHandle = null;
+        await broker.HandleBasicDeliver("tag", 21, true, "x", "rk", Delivery(21, id).BasicProperties,
+            new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("{}")));
+
+        Assert.Single(handler.Received);
+        Assert.Equal(id, handler.Received[0].Id);
+
+        await sut.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Handler_exception_with_RequeueOnFailure_false_nacks_without_requeue()
     {
         var (sut, model, broker, handler, _) = BuildAndStart(o => o.RequeueOnFailure = false);

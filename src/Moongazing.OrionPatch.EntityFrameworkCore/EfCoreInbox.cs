@@ -86,4 +86,28 @@ public sealed class EfCoreInbox : IInbox
             throw;
         }
     }
+
+    /// <inheritdoc />
+    public async ValueTask RollbackAsync(Guid messageId, CancellationToken cancellationToken)
+    {
+        var consumerKey = consumer ?? string.Empty;
+        // Detach any in-memory tracked entry first so SaveChanges does not try to re-insert
+        // it after we delete the persisted row.
+        var local = db.Set<InboxRow>().Local.FirstOrDefault(
+            r => r.MessageId == messageId && r.Consumer == consumerKey);
+        if (local is not null)
+        {
+            db.Entry(local).State = EntityState.Detached;
+        }
+
+        var persisted = await db.Set<InboxRow>()
+            .FirstOrDefaultAsync(r => r.MessageId == messageId && r.Consumer == consumerKey, cancellationToken)
+            .ConfigureAwait(false);
+        if (persisted is null)
+        {
+            return;
+        }
+        db.Set<InboxRow>().Remove(persisted);
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
 }

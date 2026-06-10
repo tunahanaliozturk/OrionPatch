@@ -25,4 +25,21 @@ public interface IInbox
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><see langword="true"/> on first delivery, <see langword="false"/> on duplicate.</returns>
     ValueTask<bool> TryAcceptAsync(Guid messageId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Reverse a previous successful <see cref="TryAcceptAsync"/> for <paramref name="messageId"/>.
+    /// Implementations remove the id from the dedup store so a subsequent
+    /// <see cref="TryAcceptAsync"/> returns <see langword="true"/> again. Used by consumer
+    /// pipelines (e.g. the RabbitMQ subscription side) when the handler fails AFTER the
+    /// inbox has already accepted - without rollback, the NACK redelivery would silently
+    /// skip the message as a duplicate and the failure would be permanently lost.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation is a no-op so existing third-party inbox storages remain
+    /// source-compatible. The shipped implementations (<see cref="Channels.InMemoryInbox"/>,
+    /// EF Core's <c>EfCoreInbox</c>) override it.
+    /// </remarks>
+    /// <param name="messageId">The id previously accepted via <see cref="TryAcceptAsync"/>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    ValueTask RollbackAsync(Guid messageId, CancellationToken cancellationToken) => default;
 }

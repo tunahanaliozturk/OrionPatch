@@ -49,6 +49,14 @@ public sealed partial class RabbitMqOutboxConsumer : BackgroundService
         Message = "Rejecting delivery {DeliveryTag} - missing or invalid orionpatch-envelope-id header")]
     private partial void LogMissingHeader(ulong deliveryTag);
 
+    [LoggerMessage(EventId = 5, Level = LogLevel.Error,
+        Message = "Handler threw for envelope {EnvelopeId} (deliveryTag {DeliveryTag}); inbox rolled back so redelivery can re-attempt")]
+    private partial void LogHandlerException(Guid envelopeId, ulong deliveryTag, Exception ex);
+
+    [LoggerMessage(EventId = 6, Level = LogLevel.Warning,
+        Message = "Channel call failed for envelope {EnvelopeId} (deliveryTag {DeliveryTag}); likely channel closed during shutdown")]
+    private partial void LogChannelCallFailed(Guid envelopeId, ulong deliveryTag, Exception ex);
+
     private readonly IConnection connection;
     private readonly IServiceProvider rootServices;
     private readonly RabbitMqOutboxConsumerOptions options;
@@ -101,7 +109,7 @@ public sealed partial class RabbitMqOutboxConsumer : BackgroundService
             LogMissingHeader(deliveryTag);
             // No envelope id means we cannot dedupe and cannot safely retry. Drop without
             // requeue so an operator can inspect the broker DLQ / log instead of looping.
-            channel!.BasicNack(deliveryTag, multiple: false, requeue: false);
+            TryChannelNack(deliveryTag, Guid.Empty, requeue: false);
             return;
         }
 
@@ -111,28 +119,73 @@ public sealed partial class RabbitMqOutboxConsumer : BackgroundService
         var handler = sp.GetRequiredService<IOrionPatchMessageHandler>();
         var stopping = CancellationToken.None;
 
+        var firstDelivery = await inbox.TryAcceptAsync(envelopeId, stopping).ConfigureAwait(false);
+        if (!firstDelivery)
+        {
+            AckOrNackDuplicate(deliveryTag, envelopeId);
+            return;
+        }
+
         try
         {
-            var firstDelivery = await inbox.TryAcceptAsync(envelopeId, stopping).ConfigureAwait(false);
-            if (!firstDelivery)
-            {
-                AckOrNackDuplicate(deliveryTag, envelopeId);
-                return;
-            }
-
             var envelope = BuildEnvelope(envelopeId, delivery);
             await handler.HandleAsync(envelope, stopping).ConfigureAwait(false);
 
-            channel!.BasicAck(deliveryTag, multiple: false);
+            TryChannelAck(deliveryTag, envelopeId);
             LogAcked(envelopeId, deliveryTag, "handler-success");
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            channel!.BasicNack(deliveryTag, multiple: false, requeue: options.RequeueOnFailure);
+            // CRITICAL: roll back the inbox acceptance BEFORE NACKing. Otherwise the broker
+            // redelivers the same envelope id, the inbox returns "already seen", and the
+            // failure becomes permanently silent (the only place that recorded the failure
+            // was the NACK that the broker about to discard via requeue-then-redeliver).
+            try
+            {
+                await inbox.RollbackAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception rollbackEx)
+            {
+                // Inbox storage is now in an inconsistent state. Log loudly so an operator
+                // can clear the row manually; we still proceed with the NACK because the
+                // alternative is silently consuming the message.
+                LogHandlerException(envelopeId, deliveryTag, rollbackEx);
+            }
+
+            TryChannelNack(deliveryTag, envelopeId, options.RequeueOnFailure);
             LogNacked(envelopeId, deliveryTag, options.RequeueOnFailure);
-            // Re-throw is NOT useful here - we're inside the AsyncEventingBasicConsumer
-            // dispatch loop; swallowing keeps the consumer alive. Operator visibility comes
-            // through the logged Nacked event + the broker DLQ when configured.
+            LogHandlerException(envelopeId, deliveryTag, ex);
+            // Re-throw is NOT useful here - we are inside the AsyncEventingBasicConsumer
+            // dispatch loop; swallowing keeps the consumer alive. Full stack trace is now
+            // captured via LogHandlerException; operator visibility also comes through the
+            // logged Nacked event + the broker DLQ when configured.
+        }
+    }
+
+    private void TryChannelAck(ulong deliveryTag, Guid envelopeId)
+    {
+        try
+        {
+            channel!.BasicAck(deliveryTag, multiple: false);
+        }
+        catch (Exception ex)
+        {
+            // Channel may have been closed during shutdown between OnReceivedAsync entering
+            // and ACKing. The broker will redeliver via redelivery semantics, the inbox
+            // dedups; logging is best-effort visibility.
+            LogChannelCallFailed(envelopeId, deliveryTag, ex);
+        }
+    }
+
+    private void TryChannelNack(ulong deliveryTag, Guid envelopeId, bool requeue)
+    {
+        try
+        {
+            channel!.BasicNack(deliveryTag, multiple: false, requeue: requeue);
+        }
+        catch (Exception ex)
+        {
+            LogChannelCallFailed(envelopeId, deliveryTag, ex);
         }
     }
 
@@ -140,12 +193,12 @@ public sealed partial class RabbitMqOutboxConsumer : BackgroundService
     {
         if (options.AckDuplicates)
         {
-            channel!.BasicAck(deliveryTag, multiple: false);
+            TryChannelAck(deliveryTag, envelopeId);
             LogAcked(envelopeId, deliveryTag, "duplicate");
         }
         else
         {
-            channel!.BasicNack(deliveryTag, multiple: false, requeue: false);
+            TryChannelNack(deliveryTag, envelopeId, requeue: false);
             LogNacked(envelopeId, deliveryTag, false);
         }
     }
