@@ -6,6 +6,37 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-06-10
+
+### Added
+
+#### `Moongazing.OrionPatch.Kafka` (NEW PACKAGE) - publisher sink
+
+Third broker sink. Implements `IOutboxSink` against Apache Kafka with idempotent producer mode.
+
+- **`KafkaOutboxSink`** produces each envelope to the configured topic with the envelope id (Guid N format) as the Kafka message key by default, so partition affinity is stable per envelope. Override via `KeySelector` to route by aggregate id / tenant when partition ordering by that axis is more meaningful for the consumer.
+- **`KafkaOutboxSinkOptions`**: `BootstrapServers`, `Topic`, optional `TopicSelector` (per-envelope routing), `KeySelector` (default = envelope id), `EnableIdempotence` (default `true`), `Acks` (default `All`; required when idempotence is on), `SendTimeout` (default 30 s; CancelAfter on the linked token so a hung produce does not stall the dispatcher).
+- **Header stamping**: `orionpatch-envelope-id`, `orionpatch-message-type`, `orionpatch-correlation-id` (when present). Caller-supplied envelope `Headers` (W3C `traceparent` / `tracestate`, tenant id) flow through verbatim. Reserved `orionpatch-*` keys win over consumer overrides.
+- **`IKafkaProducerFactory`** abstraction wraps `ProducerBuilder<string, byte[]>.Build()`. Production wires `DefaultKafkaProducerFactory` which lazily builds the producer on first use and reuses it for the factory's lifetime (Kafka producers are designed to be long-lived). `Flush(5s)` + `Dispose()` on factory disposal so buffered messages drain.
+- **`AddOrionPatchKafkaSink(configure)`** DI helper registers the sink as singleton `IOutboxSink`. Configure delegate invoked exactly once (probe then transcribe onto registered options).
+
+### Tests
+
+11 facts (across 3 TFM): produces to configured topic with envelope id key, `TopicSelector` flows through, `KeySelector` flows through, `orionpatch-envelope-id` / `orionpatch-message-type` / `orionpatch-correlation-id` headers stamped, correlation header omitted when absent, caller headers propagate but reserved keys win, payload UTF-8 round-trip, DI configure invoked exactly once, DI registers sink as singleton `IOutboxSink`.
+
+### Migration from v0.2.6
+
+Source-compatible. Add-on is opt-in:
+
+```csharp
+services.AddOrionPatchKafkaSink(o =>
+{
+    o.BootstrapServers = "kafka-1:9092,kafka-2:9092";
+    o.Topic = "orders";
+    o.KeySelector = e => e.Headers?.GetValueOrDefault("aggregate-id") ?? e.Id.ToString("N");
+});
+```
+
 ## [0.2.6] - 2026-06-10
 
 ### Added
