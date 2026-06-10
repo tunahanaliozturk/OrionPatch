@@ -180,15 +180,48 @@ public sealed class AzureServiceBusOutboxSinkTests
     }
 
     [Fact]
-    public void AddOrionPatchAzureServiceBusSink_registers_sink_as_singleton_IOutboxSink()
+    public async Task AddOrionPatchAzureServiceBusSink_registers_sink_as_singleton_IOutboxSink()
     {
         var services = new ServiceCollection();
         services.AddSingleton(new ServiceBusClient("Endpoint=sb://test.example.com/;SharedAccessKeyName=k;SharedAccessKey=Zm9v"));
         services.AddOrionPatchAzureServiceBusSink(o => o.EntityPath = "test-q");
 
-        using var sp = services.BuildServiceProvider();
+        // ServiceBusClient implements IAsyncDisposable but NOT IDisposable; the synchronous
+        // 'using' block would throw at teardown. Build the provider as an async-disposable
+        // and dispose it asynchronously.
+        await using var sp = services.BuildServiceProvider();
         var sink = sp.GetRequiredService<Moongazing.OrionPatch.Abstractions.IOutboxSink>();
 
         Assert.IsType<AzureServiceBusOutboxSink>(sink);
+    }
+
+    [Fact]
+    public void AddOrionPatchAzureServiceBusSink_invokes_configure_delegate_exactly_once()
+    {
+        var invocations = 0;
+        var services = new ServiceCollection();
+        services.AddSingleton(new ServiceBusClient("Endpoint=sb://test.example.com/;SharedAccessKeyName=k;SharedAccessKey=Zm9v"));
+
+        services.AddOrionPatchAzureServiceBusSink(o =>
+        {
+            invocations++;
+            o.EntityPath = $"q-{invocations}";
+        });
+
+        Assert.Equal(1, invocations);
+    }
+
+    [Fact]
+    public void DefaultServiceBusSenderFactory_caches_senders_per_entity_path()
+    {
+        var client = new ServiceBusClient("Endpoint=sb://test.example.com/;SharedAccessKeyName=k;SharedAccessKey=Zm9v");
+        var factory = new DefaultServiceBusSenderFactory(client);
+
+        var s1 = factory.CreateSender("q");
+        var s2 = factory.CreateSender("q");
+        var s3 = factory.CreateSender("other");
+
+        Assert.Same(s1, s2);
+        Assert.NotSame(s1, s3);
     }
 }

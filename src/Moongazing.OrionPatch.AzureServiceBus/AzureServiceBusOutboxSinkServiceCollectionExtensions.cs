@@ -23,10 +23,21 @@ public static class AzureServiceBusOutboxSinkServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configure);
 
-        services.Configure(configure);
-
+        // Probe the configure delegate ONCE to read the connection string for the
+        // optional auto-wired ServiceBusClient. Capture the rendered options instance and
+        // pass it through to services.Configure so the delegate runs exactly once even
+        // when it has side effects (e.g., reads from IConfiguration that should not be
+        // double-applied).
         var probe = new AzureServiceBusOutboxSinkOptions();
         configure(probe);
+        services.Configure<AzureServiceBusOutboxSinkOptions>(o =>
+        {
+            o.ConnectionString = probe.ConnectionString;
+            o.EntityPath = probe.EntityPath;
+            o.SubjectSelector = probe.SubjectSelector;
+            o.ContentType = probe.ContentType;
+            o.SendTimeout = probe.SendTimeout;
+        });
         if (!string.IsNullOrWhiteSpace(probe.ConnectionString))
         {
             var connectionString = probe.ConnectionString;
