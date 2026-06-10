@@ -169,12 +169,33 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            var previousCount = await attemptStore.GetAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
-            var attemptCount = previousCount + 1;
-            await attemptStore.SetAsync(envelopeId, attemptCount, CancellationToken.None).ConfigureAwait(false);
+            // Roll the inbox back FIRST. v0.2.10 reads/writes the attempt store before
+            // routing to DLQ, but a transient failure in GetAsync / SetAsync would
+            // otherwise prevent the rollback + seek from running - the envelope would
+            // stay accepted in the inbox while the offset stays uncommitted, blocking
+            // both this redelivery and any future one.
             await inbox.RollbackAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
             LogHandlerFailed(envelopeId, topic, partition, offset, ex);
 
+            int attemptCount;
+            try
+            {
+                var previousCount = await attemptStore.GetAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
+                attemptCount = previousCount + 1;
+                await attemptStore.SetAsync(envelopeId, attemptCount, CancellationToken.None).ConfigureAwait(false);
+            }
+#pragma warning disable CA1031
+            catch
+#pragma warning restore CA1031
+            {
+                // Store hiccup: skip DLQ evaluation for this redelivery (we cannot tell
+                // whether the cap has been reached without a reliable count) and fall
+                // through to the seek+redeliver path so Kafka delivers again.
+                TrySeek(consumer, result);
+                return;
+            }
+
+            _ = ex; // exception is logged above; the variable is captured here only to satisfy the catch binding.
             // v0.2.10: attempt store is consulted before evaluating MaxDeliveryAttempts.
             // The default InMemoryKafkaAttemptCountStore preserves the v0.2.9 best-effort
             // semantics; consumers wiring a persistent store (EF Core, Redis) get
