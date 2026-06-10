@@ -6,6 +6,41 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-06-10
+
+### Added
+
+#### Kafka inbound consumer (subscription side for `Moongazing.OrionPatch.Kafka`)
+
+Closes the v0.2.7 deferral. v0.2.7 shipped the producer sink (publish to Kafka); v0.2.8 ships the consumer side so a service can also subscribe to OrionPatch envelopes from Kafka.
+
+- **`KafkaInboundHostedService`** consumes records, extracts the OrionPatch envelope metadata from Kafka headers, dedups via the existing `IInbox` primitive, and dispatches to the registered handler. The handler runs inside a per-message DI scope so it can resolve scoped dependencies (DbContext, unit-of-work).
+- **`IKafkaInboundHandler`** consumer contract: `HandleAsync(InboundKafkaMessage, CancellationToken)`. Throwing is the redelivery signal.
+- **`InboundKafkaMessage(EnvelopeId, MessageType, CorrelationId, Payload, Headers, Topic, Partition, Offset)`** record captures both the OrionPatch envelope view and the Kafka coordinates so handlers can correlate with broker telemetry.
+- **Commit semantics**: manual commits gated on handler success. `EnableAutoCommit` is forced to `false` in `DefaultKafkaConsumerFactory` so a crash mid-handler is replayed.
+- **Failure path**: handler throws -> `IInbox.RollbackAsync` runs (so redelivery is not silently suppressed as a duplicate) AND the offset is NOT committed (so Kafka redelivers on the next consume).
+- **Missing envelope id header**: record is dropped and committed (a record without `orionpatch-envelope-id` is not an OrionPatch envelope - re-attempting would just spin).
+- **`IKafkaConsumerFactory`** abstraction + `DefaultKafkaConsumerFactory` (validates `BootstrapServers` and `GroupId` at construction).
+- **`AddOrionPatchKafkaInbox<THandler>(configure)`** DI helper.
+
+### Tests
+
+7 new facts cover: handler dispatched + offset committed on success, duplicate envelope id skipped + still committed, handler failure triggers rollback + no commit, missing envelope-id header is dropped + committed, `DefaultKafkaConsumerFactory` rejects empty `BootstrapServers` and empty `GroupId`, DI helper registers hosted service + scoped handler. 18 facts total across the Kafka package (x3 TFM).
+
+### Migration from v0.2.7
+
+Source-compatible. Opt-in:
+
+```csharp
+services.AddSingleton<IInbox, InMemoryInbox>();
+services.AddOrionPatchKafkaInbox<MyHandler>(o =>
+{
+    o.BootstrapServers = "kafka-1:9092";
+    o.GroupId = "orders-consumer";
+    o.Topics = new[] { "orders" };
+});
+```
+
 ## [0.2.7] - 2026-06-10
 
 ### Added
