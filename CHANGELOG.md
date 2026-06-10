@@ -6,6 +6,36 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-06-10
+
+### Added
+
+#### `Moongazing.OrionPatch.AzureServiceBus` (NEW PACKAGE) - publisher sink
+
+Second broker sink. Lands the v0.2.4 deferral. Implements `IOutboxSink` against Azure Service Bus queues and topics.
+
+- **`AzureServiceBusOutboxSink`** publishes each envelope as a `ServiceBusMessage` to the configured `EntityPath` (queue or topic). `MessageId` is set to the envelope id (Guid N format) so Service Bus' built-in duplicate detection (when enabled on the entity) absorbs broker-side retries. `Subject` flows from `SubjectSelector` (default = envelope `MessageType`); topic subscriptions filter on Subject + ApplicationProperties.
+- **Header stamping**: `ApplicationProperties["orionpatch-envelope-id"]`, `["orionpatch-message-type"]`, `["orionpatch-correlation-id"]` (when present). Caller-supplied envelope `Headers` (W3C `traceparent` / `tracestate`, tenant id) flow through verbatim. Reserved `orionpatch-*` keys win over consumer overrides so a malicious caller cannot hijack the envelope id.
+- **`AzureServiceBusOutboxSinkOptions`** covers `ConnectionString` (optional - leave null when registering `ServiceBusClient` via Azure Identity / managed identity), `EntityPath` (default `"orionpatch"`), `SubjectSelector`, `ContentType` (default `"application/json"`), and `SendTimeout` (default 30 s; CancelAfter on the linked token so a hung SDK call does not stall the dispatcher).
+- **`IServiceBusSenderFactory`** abstraction wraps `ServiceBusClient.CreateSender`. Production wires `DefaultServiceBusSenderFactory`; unit tests substitute mocks so the sink can be exercised without a real namespace.
+- **`AddOrionPatchAzureServiceBusSink(configure)`** DI helper registers the sink as singleton `IOutboxSink`. Auto-wires a `ConnectionString`-backed `ServiceBusClient` when supplied; otherwise the caller registers `ServiceBusClient` themselves (Azure Identity / managed identity path).
+
+### Tests
+
+9 facts (across 3 TFM): publishes to configured entity with envelope MessageId, ApplicationProperties stamping for envelope id / message type, caller-supplied headers propagate but reserved keys win, correlation id stamping when present, SubjectSelector flows through to message subject, ContentType from options, payload round-trips through message body, SendTimeout cancels in-flight send when SDK hangs, DI registration returns the sink as singleton `IOutboxSink`.
+
+### Migration from v0.2.5
+
+Source-compatible. The sink is an opt-in add-on:
+
+```csharp
+services.AddOrionPatchAzureServiceBusSink(o =>
+{
+    o.ConnectionString = "Endpoint=sb://contoso.servicebus.windows.net/;...";
+    o.EntityPath = "orders";
+});
+```
+
 ## [0.2.5] - 2026-06-10
 
 ### Added
