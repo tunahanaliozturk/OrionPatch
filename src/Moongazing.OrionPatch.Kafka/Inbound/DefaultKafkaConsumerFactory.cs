@@ -26,6 +26,11 @@ public sealed class DefaultKafkaConsumerFactory : IKafkaConsumerFactory
             throw new InvalidOperationException(
                 "DefaultKafkaConsumerFactory: KafkaInboxOptions.GroupId is empty.");
         }
+        if (this.options.Topics is null || this.options.Topics.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "DefaultKafkaConsumerFactory: KafkaInboxOptions.Topics must contain at least one topic.");
+        }
     }
 
     /// <inheritdoc />

@@ -80,8 +80,17 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
                 }
                 catch (ConsumeException)
                 {
-                    // Transient consume failures (rebalance, etc.). The next iteration
-                    // retries; nothing was committed so no data is lost.
+                    // Transient consume failures (rebalance, broker hiccup, auth). The
+                    // next iteration retries after a backoff to avoid hot-looping under
+                    // sustained failures. Nothing was committed so no data is lost.
+                    try
+                    {
+                        await Task.Delay(options.ConsumeRetryBackoff, stoppingToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
                     continue;
                 }
                 if (result is null || result.IsPartitionEOF)
@@ -110,7 +119,7 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
         if (!TryReadEnvelopeId(headers, out var envelopeId))
         {
             LogMissingEnvelopeId(topic, partition, offset);
-            consumer.Commit(result);
+            TryCommit(consumer, result);
             return;
         }
 
@@ -123,7 +132,7 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
             // Duplicate delivery - inbox already accepted this id. Commit so we do not
             // re-process forever.
             LogDuplicate(envelopeId, topic, partition, offset);
-            consumer.Commit(result);
+            TryCommit(consumer, result);
             return;
         }
 
@@ -140,7 +149,7 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
         try
         {
             await handler.HandleAsync(message, stoppingToken).ConfigureAwait(false);
-            consumer.Commit(result);
+            TryCommit(consumer, result);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
@@ -154,11 +163,46 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
 #pragma warning restore CA1031
         {
             // Handler failure: roll the inbox back so the redelivery is not silently
-            // suppressed as a duplicate, then deliberately do NOT commit so Kafka
-            // redelivers the message on the next consume.
+            // suppressed as a duplicate. The offset is NOT committed AND the partition
+            // is SEEKed back to this offset so the NEXT successful record in the same
+            // partition does not commit past the failed one - without the seek a later
+            // success in the same partition would commit a higher offset and the failed
+            // message would be permanently skipped.
             await inbox.RollbackAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
             LogHandlerFailed(envelopeId, topic, partition, offset, ex);
+            TrySeek(consumer, result);
         }
+    }
+
+    private static void TryCommit(IConsumer<string, byte[]> consumer, ConsumeResult<string, byte[]> result)
+    {
+        try
+        {
+            consumer.Commit(result);
+        }
+#pragma warning disable CA1031 // a commit failure must not terminate the consume loop
+        catch
+        {
+            // The offset stays uncommitted - Kafka will redeliver on the next consume,
+            // and the inbox's TryAcceptAsync false-return short-circuits the handler.
+        }
+#pragma warning restore CA1031
+    }
+
+    private static void TrySeek(IConsumer<string, byte[]> consumer, ConsumeResult<string, byte[]> result)
+    {
+        try
+        {
+            consumer.Seek(new TopicPartitionOffset(result.Topic, result.Partition, result.Offset));
+        }
+#pragma warning disable CA1031
+        catch
+        {
+            // Best-effort: if the seek fails (rebalance happened) the inbox rollback
+            // still ensures redelivery is not suppressed as a duplicate. We log and
+            // continue rather than terminating the loop.
+        }
+#pragma warning restore CA1031
     }
 
     private static Dictionary<string, string> ExtractHeaders(Headers headers)

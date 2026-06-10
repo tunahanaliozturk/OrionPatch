@@ -215,6 +215,43 @@ public sealed class KafkaInboundHostedServiceTests
     }
 
     [Fact]
+    public async Task Seeks_partition_back_to_failed_offset_so_next_success_does_not_commit_past_it()
+    {
+        // P1 invariant: when offset N fails, the loop must NOT let offset M > N commit.
+        // The seek puts the partition cursor back at N so the next consume re-reads it.
+        var envelopeId = Guid.NewGuid();
+        var seeks = new List<TopicPartitionOffset>();
+        var (svc, factory, inbox, handler, sp) = BuildSut(Record(envelopeId, offset: 9));
+        factory.Consumer.Setup(c => c.Seek(It.IsAny<TopicPartitionOffset>()))
+            .Callback<TopicPartitionOffset>(seeks.Add);
+        handler.Behaviour = _ => throw new InvalidOperationException("boom");
+        try
+        {
+            await RunUntilDrainedAsync(svc, factory, until: () => seeks.Count >= 1);
+
+            var seek = Assert.Single(seeks);
+            Assert.Equal(9, seek.Offset.Value);
+            Assert.Equal("orders", seek.Topic);
+        }
+        finally
+        {
+            await sp.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public void DefaultKafkaConsumerFactory_rejects_empty_Topics()
+    {
+        var opts = Options.Create(new KafkaInboxOptions
+        {
+            BootstrapServers = "x",
+            GroupId = "g",
+            Topics = Array.Empty<string>(),
+        });
+        Assert.Throws<InvalidOperationException>(() => new DefaultKafkaConsumerFactory(opts));
+    }
+
+    [Fact]
     public void DefaultKafkaConsumerFactory_rejects_empty_BootstrapServers()
     {
         var opts = Options.Create(new KafkaInboxOptions { BootstrapServers = string.Empty, GroupId = "g" });

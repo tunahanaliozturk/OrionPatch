@@ -23,4 +23,11 @@ public sealed class KafkaInboxOptions
 
     /// <summary>Per-consume blocking timeout. Default 1 second.</summary>
     public TimeSpan PollTimeout { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Backoff applied between iterations of the consume loop after a transient
+    /// <see cref="ConsumeException"/>. Default 1 second; prevents the loop from
+    /// hot-spinning under sustained broker / auth failures.
+    /// </summary>
+    public TimeSpan ConsumeRetryBackoff { get; set; } = TimeSpan.FromSeconds(1);
 }
