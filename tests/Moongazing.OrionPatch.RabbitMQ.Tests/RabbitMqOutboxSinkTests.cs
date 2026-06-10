@@ -62,10 +62,103 @@ public sealed class RabbitMqOutboxSinkTests
         model.Verify(m => m.BasicPublish(
             "demo",
             "r.Order.Created",
-            false,
+            true, // mandatory:true forces a BasicReturn for unroutable messages
             It.IsAny<IBasicProperties>(),
             It.IsAny<ReadOnlyMemory<byte>>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task SendAsync_serialises_concurrent_calls_on_the_shared_channel()
+    {
+        // RabbitMQ.Client requires single-publisher per channel. Concurrent calls to
+        // SendAsync against the singleton sink must NOT enter PublishCore in parallel.
+        var props = new Mock<IBasicProperties>();
+        props.SetupAllProperties();
+
+        var inFlight = 0;
+        var maxObserved = 0;
+        var gate = new object();
+
+        var model = new Mock<IModel>();
+        model.Setup(m => m.IsOpen).Returns(true);
+        model.Setup(m => m.CreateBasicProperties()).Returns(props.Object);
+        model.Setup(m => m.WaitForConfirms(It.IsAny<TimeSpan>())).Returns(true);
+        model.Setup(m => m.BasicPublish(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<bool>(),
+            It.IsAny<IBasicProperties>(),
+            It.IsAny<ReadOnlyMemory<byte>>()))
+            .Callback(() =>
+            {
+                lock (gate)
+                {
+                    inFlight++;
+                    if (inFlight > maxObserved) { maxObserved = inFlight; }
+                }
+                System.Threading.Thread.Sleep(20);
+                lock (gate) { inFlight--; }
+            });
+
+        var conn = new Mock<IConnection>();
+        conn.Setup(c => c.CreateModel()).Returns(model.Object);
+        using var sut = new RabbitMqOutboxSink(conn.Object, Opts());
+
+        var tasks = Enumerable.Range(0, 8)
+            .Select(_ => sut.SendAsync(Env(), CancellationToken.None))
+            .ToArray();
+        await Task.WhenAll(tasks);
+
+        Assert.Equal(1, maxObserved);
+    }
+
+    [Fact]
+    public async Task SendAsync_throws_when_BasicReturn_fires_for_in_flight_envelope()
+    {
+        // mandatory:true means a misconfigured exchange/routing key triggers BasicReturn
+        // BEFORE WaitForConfirms returns. The sink MUST throw so the outbox row stays
+        // unprocessed; without this, a topology bug would silently drop messages while the
+        // dispatcher marks them processed.
+        var props = new Mock<IBasicProperties>();
+        props.SetupAllProperties();
+
+        EventHandler<global::RabbitMQ.Client.Events.BasicReturnEventArgs>? capturedHandler = null;
+
+        var model = new Mock<IModel>();
+        model.Setup(m => m.IsOpen).Returns(true);
+        model.Setup(m => m.CreateBasicProperties()).Returns(props.Object);
+        model.Setup(m => m.WaitForConfirms(It.IsAny<TimeSpan>())).Returns(true);
+        model.SetupAdd(m => m.BasicReturn += It.IsAny<EventHandler<global::RabbitMQ.Client.Events.BasicReturnEventArgs>>())
+             .Callback<EventHandler<global::RabbitMQ.Client.Events.BasicReturnEventArgs>>(h => capturedHandler = h);
+
+        var envelope = Env();
+        var returnProps = new Mock<IBasicProperties>();
+        returnProps.Setup(p => p.MessageId).Returns(envelope.Id.ToString("N"));
+
+        model.Setup(m => m.BasicPublish(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(),
+                It.IsAny<IBasicProperties>(), It.IsAny<ReadOnlyMemory<byte>>()))
+            .Callback(() =>
+            {
+                // Simulate broker BasicReturn during publish (before WaitForConfirms).
+                capturedHandler?.Invoke(model.Object,
+                    new global::RabbitMQ.Client.Events.BasicReturnEventArgs
+                    {
+                        BasicProperties = returnProps.Object,
+                        ReplyCode = 312,
+                        ReplyText = "NO_ROUTE",
+                    });
+            });
+
+        var conn = new Mock<IConnection>();
+        conn.Setup(c => c.CreateModel()).Returns(model.Object);
+        using var sut = new RabbitMqOutboxSink(conn.Object, Opts());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.SendAsync(envelope, CancellationToken.None));
+        Assert.Contains("unroutable", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("NO_ROUTE", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

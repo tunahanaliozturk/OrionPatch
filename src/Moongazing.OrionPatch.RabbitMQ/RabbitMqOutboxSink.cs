@@ -42,11 +42,19 @@ public sealed partial class RabbitMqOutboxSink : IOutboxSink, IDisposable
         Message = "Failed to dispose RabbitMQ channel during sink Dispose.")]
     private partial void LogChannelDisposeFailed(Exception ex);
 
+    [LoggerMessage(EventId = 3, Level = LogLevel.Warning,
+        Message = "RabbitMQ returned envelope {EnvelopeId} as unroutable (exchange='{Exchange}', routingKey='{RoutingKey}', replyCode={ReplyCode}, replyText='{ReplyText}'). The outbox row will be re-delivered.")]
+    private partial void LogUnroutable(string envelopeId, string exchange, string routingKey, int replyCode, string replyText);
+
     private readonly IConnection connection;
     private readonly RabbitMqOutboxSinkOptions options;
     private readonly ILogger<RabbitMqOutboxSink> logger;
     private readonly object channelLock = new();
+    private readonly SemaphoreSlim publishGate = new(initialCount: 1, maxCount: 1);
     private IModel? channel;
+    private string? lastUnroutableEnvelopeId;
+    private string? lastUnroutableReplyText;
+    private int lastUnroutableReplyCode;
     private bool disposed;
 
     /// <summary>Construct with an already-resolved <see cref="IConnection"/>.</summary>
@@ -63,14 +71,27 @@ public sealed partial class RabbitMqOutboxSink : IOutboxSink, IDisposable
     }
 
     /// <inheritdoc />
-    public Task SendAsync(OutboxEnvelope envelope, CancellationToken cancellationToken = default)
+    public async Task SendAsync(OutboxEnvelope envelope, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(envelope);
         ObjectDisposedException.ThrowIf(disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // RabbitMQ.Client 6.x is synchronous; wrap so the IOutboxSink contract is honoured.
-        return Task.Run(() => PublishCore(envelope), cancellationToken);
+        // The RabbitMQ .NET client guide is explicit: concurrent BasicPublish on a shared
+        // channel can interleave frames and tear the connection down. Serialise per-sink so
+        // the dispatcher can call SendAsync from multiple workers without violating the
+        // single-publisher invariant. The semaphore also bounds the WaitForConfirms window
+        // so a slow broker does not stall a different in-flight envelope.
+        await publishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // RabbitMQ.Client 6.x is synchronous; wrap so the IOutboxSink contract is honoured.
+            await Task.Run(() => PublishCore(envelope), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            publishGate.Release();
+        }
     }
 
     private void PublishCore(OutboxEnvelope envelope)
@@ -114,10 +135,23 @@ public sealed partial class RabbitMqOutboxSink : IOutboxSink, IDisposable
 
         var body = Encoding.UTF8.GetBytes(envelope.Payload);
 
+        // Reset the per-publish unroutable bookkeeping so we only react to a return that
+        // belongs to THIS message. The BasicReturn handler is registered once when the
+        // channel is opened.
+        lastUnroutableEnvelopeId = null;
+        lastUnroutableReplyText = null;
+        lastUnroutableReplyCode = 0;
+
+        // mandatory:true makes the broker call BasicReturn when no queue is bound to the
+        // (exchange, routingKey). Without this, a misconfigured topology silently drops the
+        // message AND the publisher-confirm still acks (the broker confirms the EXCHANGE
+        // received the message, not that any QUEUE did) - the outbox row would be marked
+        // processed even though no consumer can ever see it. Returning the message gives us
+        // a deterministic signal to throw so the dispatcher re-delivers on the next cycle.
         ch.BasicPublish(
             exchange: options.ExchangeName,
             routingKey: routingKey,
-            mandatory: false,
+            mandatory: true,
             basicProperties: props,
             body: body);
 
@@ -129,6 +163,20 @@ public sealed partial class RabbitMqOutboxSink : IOutboxSink, IDisposable
                     $"RabbitMQ broker did not acknowledge envelope {envelope.Id:N} within {options.ConfirmTimeout}. " +
                     "The outbox row remains unprocessed and will be re-delivered on the next dispatch cycle.");
             }
+        }
+
+        // BasicReturn for an unroutable message arrives BEFORE the publisher-confirm ack on
+        // the same channel, so by the time WaitForConfirms returns we know whether the
+        // message was returned. Throwing here keeps the outbox row unprocessed so the next
+        // dispatch cycle re-delivers (or the operator fixes the topology).
+        if (lastUnroutableEnvelopeId == envelope.Id.ToString("N"))
+        {
+            var replyCode = lastUnroutableReplyCode;
+            var replyText = lastUnroutableReplyText;
+            LogUnroutable(envelope.Id.ToString("N"), options.ExchangeName, routingKey, replyCode, replyText ?? string.Empty);
+            throw new InvalidOperationException(
+                $"RabbitMQ returned envelope {envelope.Id:N} as unroutable (replyCode={replyCode}, replyText='{replyText}'). " +
+                "The exchange / routing key has no matching queue binding; the outbox row remains unprocessed.");
         }
 
         LogPublished(envelope.Id, envelope.MessageType, options.ExchangeName, routingKey);
@@ -154,8 +202,23 @@ public sealed partial class RabbitMqOutboxSink : IOutboxSink, IDisposable
             {
                 channel.ConfirmSelect();
             }
+            // Single BasicReturn handler bound to the channel. The publish-side state set in
+            // PublishCore (envelope id, reply code/text) is what makes the latest publish
+            // attribute the return correctly; the publishGate ensures only one publish is in
+            // flight at a time so there is no cross-message confusion.
+            channel.BasicReturn += OnBasicReturn;
             return channel;
         }
+    }
+
+    private void OnBasicReturn(object? sender, global::RabbitMQ.Client.Events.BasicReturnEventArgs e)
+    {
+        // The broker echoes the message id we stamped at publish time. We use it to confirm
+        // the return belongs to the in-flight envelope (defensive; the publishGate already
+        // prevents interleaving).
+        lastUnroutableEnvelopeId = e.BasicProperties?.MessageId;
+        lastUnroutableReplyCode = e.ReplyCode;
+        lastUnroutableReplyText = e.ReplyText;
     }
 
     /// <inheritdoc />
@@ -168,9 +231,17 @@ public sealed partial class RabbitMqOutboxSink : IOutboxSink, IDisposable
         disposed = true;
         lock (channelLock)
         {
-            try { channel?.Dispose(); }
+            try
+            {
+                if (channel is not null)
+                {
+                    channel.BasicReturn -= OnBasicReturn;
+                    channel.Dispose();
+                }
+            }
             catch (Exception ex) { LogChannelDisposeFailed(ex); }
             channel = null;
         }
+        publishGate.Dispose();
     }
 }
