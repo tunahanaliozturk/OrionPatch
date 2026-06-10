@@ -6,6 +6,28 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-06-11
+
+### Added
+
+#### Kafka inbound dead-letter topic routing
+
+Extends the v0.2.8 inbound consumer. v0.2.8 redelivered failed messages indefinitely (handler failure -> rollback + seek-back + Kafka redelivery). v0.2.9 adds a poison-pill protection: after `MaxDeliveryAttempts` failures, the record is routed to a configurable dead-letter topic and the original offset is committed.
+
+- `KafkaInboxOptions.DeadLetterTopic` (nullable, default null = v0.2.8 behaviour) + `MaxDeliveryAttempts` (default 5).
+- `IKafkaInboundDeadLetterProducer` consumer-supplied sink that the inbound service produces to when an envelope has failed `MaxDeliveryAttempts` times.
+- DLQ record carries the original key + value + headers PLUS `orionpatch-dlq-original-topic` / `original-partition` / `original-offset` / `attempt-count` / `reason` diagnostic headers.
+- Attempt counter is in-memory per envelope id (best-effort; resets on consumer restart). Production deployments needing transactional guarantees back the counter with the IInbox store.
+- When DLQ routing is configured but no producer is registered, the service falls back to the v0.2.8 redeliver-forever path so the feature is safe to flip on incrementally.
+
+### Tests
+
+1 new fact: after 3 failures, the envelope is routed to the DLQ topic with the original-topic / attempt-count headers stamped. 21 facts total across the Kafka package (x3 TFM).
+
+### Migration from v0.2.8
+
+Source-compatible.
+
 ## [0.2.8] - 2026-06-10
 
 ### Added
