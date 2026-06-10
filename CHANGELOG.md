@@ -6,6 +6,38 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-10
+
+### Added
+
+#### `Moongazing.OrionPatch.RabbitMQ` (NEW PACKAGE) - publisher sink
+
+First broker sink. Implements `IOutboxSink` by publishing each envelope to a configurable RabbitMQ exchange with publisher confirms enabled. Subscription / consumer side stages to v0.2.5.
+
+- **`RabbitMqOutboxSink`** opens one `IModel` lazily per sink instance and reuses it for the sink's lifetime; the underlying `IConnection` is owned by DI so multiple sinks can share one connection. Channel reopen is automatic when the previous channel closes.
+- **`RabbitMqOutboxSinkOptions`** covers `ExchangeName` (default `orionpatch`), `RoutingKeySelector` (default = envelope's `MessageType`), `UsePublisherConfirms` (default `true`), `ConfirmTimeout` (default 10 s), `PersistentDelivery` (default `true`), and `ContentType` (default `application/json`). Optional `ConnectionString` triggers a built-in `IConnection` registration via `ConnectionFactory`.
+- **Headers stamped**: `orionpatch-envelope-id` (Guid N format), `orionpatch-message-type`, `orionpatch-correlation-id` (when present). Caller-supplied envelope `Headers` (W3C `traceparent` / `tracestate`, tenant id) flow through verbatim; reserved `orionpatch-*` keys cannot be overridden.
+- **Publisher confirms**: `WaitForConfirms(ConfirmTimeout)` after every publish; a non-ack throws so the outbox row stays unprocessed and the next dispatch cycle re-delivers. Set `UsePublisherConfirms = false` for fire-and-forget where lower per-message latency matters more than broker-side durability.
+- **`AddOrionPatchRabbitMqSink(configure)`** DI helper registers the sink as singleton `IOutboxSink`; auto-wires a `ConnectionFactory`-backed singleton `IConnection` when `ConnectionString` is supplied.
+
+### Deferred
+
+- **`OrionPatch.RabbitMQ` consumer / subscription side** -> v0.2.5 (originally bundled in v0.2.4; staged so the publisher path ships now and the consumer gets a focused review with publish-side experience to ground the contract).
+- **`OrionPatch.AzureServiceBus` sink** -> v0.2.6 (was v0.2.5; bumps one minor to make room for the RabbitMQ consumer)
+
+### Migration from v0.2.3
+
+Source-compatible. The sink is an opt-in add-on:
+
+```csharp
+services.AddOrionPatchRabbitMqSink(o =>
+{
+    o.ConnectionString = "amqp://guest:guest@localhost:5672/";
+    o.ExchangeName = "orders";
+    o.RoutingKeySelector = e => $"order.{e.MessageType}";
+});
+```
+
 ## [0.2.3] - 2026-06-09
 
 ### Added
