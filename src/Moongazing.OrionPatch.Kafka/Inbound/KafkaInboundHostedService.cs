@@ -40,8 +40,6 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
     private readonly KafkaInboxOptions options;
     private readonly IServiceScopeFactory scopeFactory;
     private readonly ILogger<KafkaInboundHostedService> logger;
-    // Per-envelope attempt counter. Best-effort: in-memory only, resets on restart.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, int> attempts = new();
 
     public KafkaInboundHostedService(
         IKafkaConsumerFactory factory,
@@ -152,10 +150,12 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
             partition,
             offset);
 
+        var attemptStore = scope.ServiceProvider.GetRequiredService<IKafkaAttemptCountStore>();
+
         try
         {
             await handler.HandleAsync(message, stoppingToken).ConfigureAwait(false);
-            attempts.TryRemove(envelopeId, out _);
+            await attemptStore.ClearAsync(envelopeId, stoppingToken).ConfigureAwait(false);
             TryCommit(consumer, result);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -169,21 +169,43 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            var attemptCount = attempts.AddOrUpdate(envelopeId, 1, (_, current) => current + 1);
+            // Roll the inbox back FIRST. v0.2.10 reads/writes the attempt store before
+            // routing to DLQ, but a transient failure in GetAsync / SetAsync would
+            // otherwise prevent the rollback + seek from running - the envelope would
+            // stay accepted in the inbox while the offset stays uncommitted, blocking
+            // both this redelivery and any future one.
             await inbox.RollbackAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
             LogHandlerFailed(envelopeId, topic, partition, offset, ex);
 
-            // v0.2.9: route to the dead-letter topic when the message has failed
-            // MaxDeliveryAttempts times. The poison-pill protection is best-effort
-            // because the attempt counter lives in memory only; a consumer restart
-            // resets it. Production deployments wanting a stronger guarantee use a
-            // persisted attempt store (e.g. via the IInbox extension point).
+            int attemptCount;
+            try
+            {
+                var previousCount = await attemptStore.GetAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
+                attemptCount = previousCount + 1;
+                await attemptStore.SetAsync(envelopeId, attemptCount, CancellationToken.None).ConfigureAwait(false);
+            }
+#pragma warning disable CA1031
+            catch
+#pragma warning restore CA1031
+            {
+                // Store hiccup: skip DLQ evaluation for this redelivery (we cannot tell
+                // whether the cap has been reached without a reliable count) and fall
+                // through to the seek+redeliver path so Kafka delivers again.
+                TrySeek(consumer, result);
+                return;
+            }
+
+            _ = ex; // exception is logged above; the variable is captured here only to satisfy the catch binding.
+            // v0.2.10: attempt store is consulted before evaluating MaxDeliveryAttempts.
+            // The default InMemoryKafkaAttemptCountStore preserves the v0.2.9 best-effort
+            // semantics; consumers wiring a persistent store (EF Core, Redis) get
+            // restart-survivable DLQ routing.
             if (!string.IsNullOrEmpty(options.DeadLetterTopic)
                 && attemptCount >= options.MaxDeliveryAttempts)
             {
                 if (await TryDeadLetterAsync(envelopeId, result, attemptCount, ex, stoppingToken).ConfigureAwait(false))
                 {
-                    attempts.TryRemove(envelopeId, out _);
+                    await attemptStore.ClearAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
                     LogDeadLettered(envelopeId, options.DeadLetterTopic!, attemptCount, topic, partition, offset);
                     TryCommit(consumer, result);
                     return;

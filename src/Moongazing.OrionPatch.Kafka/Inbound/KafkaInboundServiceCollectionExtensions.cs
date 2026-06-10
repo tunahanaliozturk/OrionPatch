@@ -38,6 +38,9 @@ public static class KafkaInboundServiceCollectionExtensions
         });
 
         services.TryAddSingleton<IKafkaConsumerFactory, DefaultKafkaConsumerFactory>();
+        // v0.2.10 default store. Consumers wiring an EF Core / Redis-backed store
+        // register it before AddOrionPatchKafkaInbox so this TryAdd yields.
+        services.TryAddSingleton<IKafkaAttemptCountStore, InMemoryKafkaAttemptCountStore>();
         services.AddScoped<IKafkaInboundHandler, THandler>();
         services.AddHostedService<KafkaInboundHostedService>();
         return services;

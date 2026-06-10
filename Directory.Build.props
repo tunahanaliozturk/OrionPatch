@@ -15,6 +15,6 @@
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/tunahanaliozturk/OrionPatch</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <Version>0.2.9</Version>
+    <Version>0.2.10</Version>
   </PropertyGroup>
 </Project>
