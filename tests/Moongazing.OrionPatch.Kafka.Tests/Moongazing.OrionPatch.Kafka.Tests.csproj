@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsPackable>false</IsPackable>
-    <NoWarn>$(NoWarn);CA1707;CA2007</NoWarn>
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1861;CS8603</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
