@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PackageId>OrionPatch.Kafka</PackageId>
+    <Description>Apache Kafka publisher sink for OrionPatch. Implements IOutboxSink by producing each envelope to a configurable topic with the envelope id as the message key (partition affinity for ordering) and Kafka headers carrying orionpatch-message-type / orionpatch-correlation-id / consumer-supplied envelope headers.</Description>
+    <PackageTags>outbox;kafka;publisher;cqrs;dotnet</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Confluent.Kafka" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
+  </ItemGroup>
+</Project>
