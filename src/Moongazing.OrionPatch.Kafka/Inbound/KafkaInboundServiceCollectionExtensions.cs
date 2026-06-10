@@ -30,6 +30,11 @@ public static class KafkaInboundServiceCollectionExtensions
             o.Topics = probe.Topics;
             o.AutoOffsetReset = probe.AutoOffsetReset;
             o.PollTimeout = probe.PollTimeout;
+            // v0.2.9 fields - without these the DLQ feature is silently disabled when
+            // the consumer wires it through AddOrionPatchKafkaInbox.
+            o.ConsumeRetryBackoff = probe.ConsumeRetryBackoff;
+            o.DeadLetterTopic = probe.DeadLetterTopic;
+            o.MaxDeliveryAttempts = probe.MaxDeliveryAttempts;
         });
 
         services.TryAddSingleton<IKafkaConsumerFactory, DefaultKafkaConsumerFactory>();
