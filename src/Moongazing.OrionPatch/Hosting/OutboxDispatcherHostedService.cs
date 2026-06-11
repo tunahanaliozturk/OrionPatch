@@ -81,6 +81,9 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                     await clock.DelayAsync(opts.PollingInterval, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
+                // v0.2.16 batch-size histogram: zero-row cycles do NOT emit so the
+                // histogram tail reflects actual produced batches, not idle polling.
+                OrionPatchDiagnostics.BatchSize.Record(batch.Count);
 
                 foreach (var row in batch)
                 {
