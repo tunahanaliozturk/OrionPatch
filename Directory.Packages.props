@@ -19,6 +19,7 @@
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="8.0.10" />
     <PackageVersion Include="System.Text.Json" Version="8.0.5" />
     <PackageVersion Include="xunit" Version="2.9.0" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
