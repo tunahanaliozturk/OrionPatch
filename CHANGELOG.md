@@ -6,6 +6,29 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-06-11
+
+### Added
+
+#### `orionpatch.outbox.attempts_per_row` histogram
+
+`Histogram<int>` of how many attempts each row took before reaching its terminal state. Operators graph p99 to spot rows that burn most of `MaxAttempts` before stabilising:
+
+- Tail rising = `BackoffStrategy` needs tuning or the sink is flapping under specific message types.
+- p50 == 1 with p99 == MaxAttempts = healthy steady-state with rare hard-fails (dead-letters).
+
+Recorded on BOTH terminal paths (success commit + dead-letter commit) so the distribution covers the full row lifecycle, not just happy-path successes.
+
+Public `OrionPatchDiagnostics.RecordAttemptsPerRow(int)` helper.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.22
+
+Source-compatible.
+
 ## [0.2.22] - 2026-06-11
 
 ### Fixed
