@@ -48,7 +48,19 @@ public static class OrionPatchServiceCollectionExtensions
             {
                 return new NoOpHostedService();
             }
-            return ActivatorUtilities.CreateInstance<OutboxDispatcherHostedService>(sp);
+            // v0.2.20: explicit resolution so both observability hooks
+            // (IDeadLetterSink, IOutboxDispatchObserver) can be registered
+            // independently. ActivatorUtilities.CreateInstance falls back to a shorter
+            // ctor if any single nullable parameter has no registered service, which
+            // would silently drop one hook when the consumer registered only the other.
+            return new OutboxDispatcherHostedService(
+                sp.GetRequiredService<Abstractions.IOutboxStorage>(),
+                sp.GetRequiredService<Abstractions.IOutboxSink>(),
+                sp.GetRequiredService<IOptions<Configuration.OrionPatchOptions>>(),
+                sp.GetRequiredService<Abstractions.IOutboxDispatcherClock>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<OutboxDispatcherHostedService>>(),
+                sp.GetService<Abstractions.IDeadLetterSink>(),
+                sp.GetService<Abstractions.IOutboxDispatchObserver>());
         });
 
         return new OrionPatchBuilder(services);
