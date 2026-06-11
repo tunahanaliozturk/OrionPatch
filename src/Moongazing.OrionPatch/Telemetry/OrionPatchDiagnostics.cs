@@ -47,4 +47,13 @@ public static class OrionPatchDiagnostics
     /// </summary>
     public static readonly Histogram<int> BatchSize =
         Meter.CreateHistogram<int>("orionpatch.outbox.batch_size", unit: "{rows}");
+
+    /// <summary>
+    /// v0.2.17 distribution of how long `IOutboxStorage.ClaimNextAsync` takes per
+    /// dispatcher cycle (the storage round-trip wall-clock). Operators graph p99 to
+    /// spot a storage backend that is slow to claim rows. EVERY cycle emits including
+    /// zero-row cycles - poll latency is itself the signal.
+    /// </summary>
+    public static readonly Histogram<double> PollDuration =
+        Meter.CreateHistogram<double>("orionpatch.outbox.poll.duration", unit: "ms");
 }
