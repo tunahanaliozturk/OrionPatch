@@ -6,6 +6,32 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-06-11
+
+### Added
+
+#### `IDeadLetterSink` extensibility
+
+Consumer-supplied observer invoked when an outbox row is dead-lettered. Useful for routing the envelope to an external triage system (Slack, PagerDuty, follow-up review queue) without baking the routing into the dispatcher.
+
+- `IDeadLetterSink` interface in `Moongazing.OrionPatch.Abstractions`.
+- `NullDeadLetterSink` default implementation.
+- Optional 6-arg `OutboxDispatcherHostedService` ctor wires the sink; 5-arg legacy ctor still works.
+- Sink invoked AFTER `storage.DeadLetterAsync` succeeds; sink exceptions are logged and swallowed (sink is observability, not load-bearing).
+- Cancellation propagates.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.17
+
+Source-compatible.
+
+```csharp
+services.AddSingleton<IDeadLetterSink, MyTriageSink>();
+```
+
 ## [0.2.17] - 2026-06-11
 
 ### Added

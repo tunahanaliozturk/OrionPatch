@@ -32,6 +32,9 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
     private readonly IOptions<OrionPatchOptions> options;
     private readonly IOutboxDispatcherClock clock;
     private readonly ILogger<OutboxDispatcherHostedService> logger;
+    // v0.2.18 consumer-supplied dead-letter observer. Optional - null/NullDeadLetterSink
+    // is the back-compat default that v0.2.17 consumers see.
+    private readonly IDeadLetterSink? deadLetterSink;
 
     /// <summary>Create the dispatcher with its storage, sink, options, clock, and logger.</summary>
     /// <param name="storage">Outbox row store.</param>
@@ -46,6 +49,18 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
         IOptions<OrionPatchOptions> options,
         IOutboxDispatcherClock clock,
         ILogger<OutboxDispatcherHostedService> logger)
+        : this(storage, sink, options, clock, logger, deadLetterSink: null)
+    {
+    }
+
+    /// <summary>v0.2.18 6-arg overload that wires the optional <see cref="IDeadLetterSink"/>.</summary>
+    public OutboxDispatcherHostedService(
+        IOutboxStorage storage,
+        IOutboxSink sink,
+        IOptions<OrionPatchOptions> options,
+        IOutboxDispatcherClock clock,
+        ILogger<OutboxDispatcherHostedService> logger,
+        IDeadLetterSink? deadLetterSink)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(sink);
@@ -57,7 +72,32 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
         this.options = options;
         this.clock = clock;
         this.logger = logger;
+        this.deadLetterSink = deadLetterSink;
     }
+
+    private static OutboxEnvelope? TryBuildEnvelope(OutboxRow row, OrionPatchOptions opts)
+    {
+        try
+        {
+            IReadOnlyDictionary<string, string>? headers = null;
+            if (!string.IsNullOrEmpty(row.HeadersJson))
+            {
+                headers = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, string>>(
+                    row.HeadersJson, opts.JsonOptions);
+            }
+            return new OutboxEnvelope(row.Id, row.MessageType, row.Payload, headers, row.CorrelationId, row.OccurredAtUtc, row.AttemptCount + 1);
+        }
+#pragma warning disable CA1031
+        catch
+#pragma warning restore CA1031
+        {
+            return null;
+        }
+    }
+
+    [LoggerMessage(EventId = 4001, Level = LogLevel.Warning,
+        Message = "Dead-letter sink failed for outbox row {RowId}; dead-letter state is already persisted.")]
+    private partial void LogDeadLetterSinkFailed(System.Guid rowId, System.Exception exception);
 
     /// <summary>
     /// Runs the claim-dispatch-complete loop until the host requests shutdown.
@@ -169,6 +209,30 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                 {
                     await storage.DeadLetterAsync(row.Id, truncated, cancellationToken).ConfigureAwait(false);
                     OrionPatchDiagnostics.DeadLettered.Add(1);
+                    // v0.2.18 IDeadLetterSink: notify the consumer-registered sink AFTER
+                    // the storage state is updated. A throwing sink does NOT roll the
+                    // dead-letter back; sink exceptions are logged and swallowed because
+                    // the sink is observability, not a load-bearing dispatch step.
+                    var sinkRef = deadLetterSink;
+                    if (sinkRef is not null and not NullDeadLetterSink)
+                    {
+                        try
+                        {
+                            await sinkRef.OnDeadLetteredAsync(
+                                row.Id, TryBuildEnvelope(row, opts), truncated, attempt, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+#pragma warning disable CA1031
+                        catch (Exception sinkEx)
+#pragma warning restore CA1031
+                        {
+                            LogDeadLetterSinkFailed(row.Id, sinkEx);
+                        }
+                    }
                 }
                 else
                 {
