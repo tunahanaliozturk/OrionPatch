@@ -230,6 +230,10 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                         catch (Exception sinkEx)
 #pragma warning restore CA1031
                         {
+                            // v0.2.19: counter for operator alerting. Pairs with the
+                            // structured log line so operators can both detect the
+                            // failure rate AND grep the log for context.
+                            OrionPatchDiagnostics.RecordDeadLetterSinkFailure(sinkEx.GetType().Name);
                             LogDeadLetterSinkFailed(row.Id, sinkEx);
                         }
                     }

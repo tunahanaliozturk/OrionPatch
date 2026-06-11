@@ -6,6 +6,26 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-06-11
+
+### Added
+
+#### `orionpatch.outbox.dead_letter_sink_failures` counter
+
+`Counter<long>` increments each time the v0.2.18 `IDeadLetterSink` observer throws. The dead-letter database state is still applied (the sink is observability, not load-bearing) so this metric is purely operator-facing alerting for "your DLQ notifier is down".
+
+- Tag: `exception_type`.
+- Pairs with the existing structured log line - operators can both alert on rate AND grep the log for context.
+- Public `OrionPatchDiagnostics.RecordDeadLetterSinkFailure(string)` helper.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.18
+
+Source-compatible.
+
 ## [0.2.18] - 2026-06-11
 
 ### Added
