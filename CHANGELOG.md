@@ -6,6 +6,34 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-06-11
+
+### Added
+
+#### `MemoryCacheKafkaAttemptCountStore` L1 wrapper
+
+Decorator that fronts a slower persistent inner `IKafkaAttemptCountStore` (v0.2.11 `EfCoreKafkaAttemptCountStore`, future Redis impl) with an in-memory write-through cache. The hot-path read on every failure no longer round-trips to the database, but the count stays restart-survivable because the inner store sees every write.
+
+- `MemoryCacheKafkaAttemptCountStore(IKafkaAttemptCountStore inner)`.
+- `GetAsync` reads cache first; on miss forwards to inner and populates the cache with the result. Does NOT cache zero so concurrent inner writes become visible.
+- `SetAsync` writes to inner FIRST then the cache so a transient inner failure does not leave the cache ahead of the truth.
+- `ClearAsync` evicts the cache before forwarding to the inner so a concurrent redelivery sees the inner truth rather than a stale cache hit.
+- No TTL: counts are write-driven (every failure / success ticks the value) so stale entries naturally refresh.
+
+### Tests
+
+6 new facts.
+
+### Migration from v0.2.11
+
+Source-compatible.
+
+```csharp
+services.AddSingleton<EfCoreKafkaAttemptCountStore<AppDbContext>>();
+services.AddSingleton<IKafkaAttemptCountStore>(sp =>
+    new MemoryCacheKafkaAttemptCountStore(sp.GetRequiredService<EfCoreKafkaAttemptCountStore<AppDbContext>>()));
+```
+
 ## [0.2.11] - 2026-06-11
 
 ### Added
