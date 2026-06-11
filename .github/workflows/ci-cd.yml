@@ -56,6 +56,9 @@ jobs:
           dotnet pack src/Moongazing.OrionPatch/Moongazing.OrionPatch.csproj --no-build --configuration Release -o ./nupkgs
           dotnet pack src/Moongazing.OrionPatch.EntityFrameworkCore/Moongazing.OrionPatch.EntityFrameworkCore.csproj --no-build --configuration Release -o ./nupkgs
           dotnet pack src/Moongazing.OrionPatch.Testing/Moongazing.OrionPatch.Testing.csproj --no-build --configuration Release -o ./nupkgs
+          dotnet pack src/Moongazing.OrionPatch.Kafka/Moongazing.OrionPatch.Kafka.csproj --no-build --configuration Release -o ./nupkgs
+          dotnet pack src/Moongazing.OrionPatch.RabbitMQ/Moongazing.OrionPatch.RabbitMQ.csproj --no-build --configuration Release -o ./nupkgs
+          dotnet pack src/Moongazing.OrionPatch.AzureServiceBus/Moongazing.OrionPatch.AzureServiceBus.csproj --no-build --configuration Release -o ./nupkgs
       - name: Push to NuGet.org
         run: dotnet nuget push "./nupkgs/*.nupkg" --api-key "${{ secrets.NUGET }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
       - name: Push to GitHub Packages
