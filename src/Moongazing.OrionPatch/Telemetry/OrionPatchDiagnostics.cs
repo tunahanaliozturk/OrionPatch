@@ -56,4 +56,19 @@ public static class OrionPatchDiagnostics
     /// </summary>
     public static readonly Histogram<double> PollDuration =
         Meter.CreateHistogram<double>("orionpatch.outbox.poll.duration", unit: "ms");
+
+    /// <summary>
+    /// v0.2.19 counter for the v0.2.18 <see cref="Abstractions.IDeadLetterSink"/>
+    /// observer faults. Increments each time the sink throws; the dead-letter database
+    /// state is still applied (the sink is observability, not load-bearing) so this
+    /// metric is purely operator-facing alerting for "your DLQ notifier is down".
+    /// Tagged with <c>exception_type</c>.
+    /// </summary>
+    public static readonly Counter<long> DeadLetterSinkFailures =
+        Meter.CreateCounter<long>("orionpatch.outbox.dead_letter_sink_failures", unit: "{failures}");
+
+    /// <summary>Record a <see cref="Abstractions.IDeadLetterSink"/> failure tagged with the exception type.</summary>
+    public static void RecordDeadLetterSinkFailure(string exceptionType)
+        => DeadLetterSinkFailures.Add(1,
+            new System.Collections.Generic.KeyValuePair<string, object?>("exception_type", exceptionType));
 }
