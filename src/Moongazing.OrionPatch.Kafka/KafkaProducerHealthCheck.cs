@@ -35,36 +35,57 @@ public sealed class KafkaProducerHealthCheck : IHealthCheck, IDisposable
     }
 
     /// <inheritdoc />
-    public Task<HealthCheckResult> CheckHealthAsync(
+    public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
-        try
+        // The native AdminClient.GetMetadata call is synchronous and ignores the
+        // ASP.NET health-check cancellationToken. Honor it by offloading the call to a
+        // worker thread (Task.Run) and racing the probe Task against the cancellation
+        // token. If cancellation wins the metadata Task is left to complete in the
+        // background; the AdminClient handles its own teardown on Dispose.
+        var probe = Task.Run(() =>
         {
             var admin = GetOrCreateAdmin();
-            // GetMetadata is a synchronous call against the broker. The native client times
-            // out per the supplied TimeSpan if the broker is unreachable.
-            var metadata = admin.GetMetadata(checkOptions.Timeout);
+            return admin.GetMetadata(checkOptions.Timeout);
+        }, cancellationToken);
+
+        var cancellation = Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, cancellationToken);
+        var done = await Task.WhenAny(probe, cancellation).ConfigureAwait(false);
+        if (done == cancellation)
+        {
+            // Caller's deadline beat the probe. Surface Unhealthy with a clear message
+            // rather than throwing TaskCanceledException out of the health pipeline.
+            return HealthCheckResult.Unhealthy(
+                "Kafka broker metadata probe cancelled (caller deadline hit before the broker responded).",
+                data: new System.Collections.Generic.Dictionary<string, object>
+                {
+                    ["bootstrap"] = producerOptions.BootstrapServers,
+                });
+        }
+        try
+        {
+            var metadata = await probe.ConfigureAwait(false);
             var data = new System.Collections.Generic.Dictionary<string, object>
             {
                 ["brokers"] = metadata.Brokers.Count,
                 ["topics"] = metadata.Topics.Count,
                 ["bootstrap"] = producerOptions.BootstrapServers,
             };
-            return Task.FromResult(HealthCheckResult.Healthy(
+            return HealthCheckResult.Healthy(
                 $"Kafka broker metadata returned {metadata.Brokers.Count} brokers.",
-                data: data));
+                data: data);
         }
 #pragma warning disable CA1031 // health-check probe collapses ANY broker-side fault into Unhealthy
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            return Task.FromResult(HealthCheckResult.Unhealthy(
+            return HealthCheckResult.Unhealthy(
                 $"Kafka broker metadata probe failed: {ex.GetType().Name}: {ex.Message}",
                 exception: ex,
                 data: new System.Collections.Generic.Dictionary<string, object>
                 {
                     ["bootstrap"] = producerOptions.BootstrapServers,
-                }));
+                });
         }
     }
 
