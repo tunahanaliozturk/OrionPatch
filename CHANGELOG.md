@@ -6,6 +6,26 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-06-11
+
+### Added
+
+#### `orionpatch.outbox.batch_size` histogram
+
+`Histogram<int>` on the existing `OrionPatchDiagnostics` Meter that records rows claimed per dispatcher cycle. Operators graph p99 to spot a dispatcher that is consistently maxing out `BatchSize` (a sign that throughput is bottlenecked and the batch should be raised) or staying near 0 (a sign that polling cadence is over-sized for the actual traffic).
+
+- Recorded in `OutboxDispatcherHostedService` immediately after the storage `ClaimNextAsync` returns.
+- Zero-row cycles do NOT emit so the histogram tail reflects actual produced batches, not idle polling.
+- Public on `OrionPatchDiagnostics` so consumer-owned dispatchers can opt in.
+
+### Tests
+
+1 fact (x2 TFM).
+
+### Migration from v0.2.15
+
+Source-compatible.
+
 ## [0.2.15] - 2026-06-11
 
 ### Added
