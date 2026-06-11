@@ -6,6 +6,31 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-06-11
+
+### Added
+
+#### `EfCoreKafkaAttemptCountStore<TDbContext>` - EF Core-backed attempt persistence
+
+Builds on the v0.2.10 `IKafkaAttemptCountStore` abstraction. v0.2.10 shipped the contract + an in-memory default; v0.2.11 ships the EF Core-backed implementation so production deployments get restart-survivable DLQ routing.
+
+- `EfCoreKafkaAttemptCountStore<TDbContext>` resolves a fresh DbContext per call from `IServiceScopeFactory` and persists per-envelope attempt counts in a `KafkaInboundAttempt` entity (one row per envelope id, `AttemptCount` + `LastUpdatedUtc`).
+- `KafkaInboundAttempt.Configure(ModelBuilder)` convenience helper for the default mapping (table `OrionPatchKafkaInboundAttempts`, PK on `EnvelopeId`).
+- Lives in `Moongazing.OrionPatch.EntityFrameworkCore` so it co-locates with the existing v0.2.x EF Core storage; that package now project-references `Moongazing.OrionPatch.Kafka`.
+
+### Tests
+
+6 new facts (x3 TFM).
+
+### Migration from v0.2.10
+
+Source-compatible.
+
+```csharp
+services.AddSingleton<IKafkaAttemptCountStore, EfCoreKafkaAttemptCountStore<AppDbContext>>();
+services.AddOrionPatchKafkaInbox<MyHandler>(o => { o.BootstrapServers = "..."; o.DeadLetterTopic = "orders.dlq"; o.MaxDeliveryAttempts = 5; });
+```
+
 ## [0.2.10] - 2026-06-11
 
 ### Added
