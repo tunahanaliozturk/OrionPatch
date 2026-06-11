@@ -24,7 +24,26 @@ Builds on the v0.2.10 `IKafkaAttemptCountStore` abstraction. v0.2.10 shipped the
 
 ### Migration from v0.2.10
 
-Source-compatible.
+Source-compatible. Three wiring steps required to flip on persistent counters:
+
+1. Register the entity in the DbContext (the convenience helper covers the default mapping):
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    base.OnModelCreating(modelBuilder);
+    KafkaInboundAttempt.Configure(modelBuilder);
+}
+```
+
+2. Generate + apply an EF Core migration. The runtime does NOT auto-create the table - production deployments use the consumer's migrations pipeline:
+
+```bash
+dotnet ef migrations add AddKafkaInboundAttempts
+dotnet ef database update
+```
+
+3. Register the store + the inbound consumer:
 
 ```csharp
 services.AddSingleton<IKafkaAttemptCountStore, EfCoreKafkaAttemptCountStore<AppDbContext>>();
