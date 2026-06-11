@@ -12,7 +12,7 @@ public static class KafkaInboundDiagnostics
     /// <summary>Meter name used by the Kafka inbound hosted service.</summary>
     public const string MeterName = "Moongazing.OrionPatch.Kafka.Inbound";
 
-    private static readonly Meter Meter = new(MeterName, "0.2.13");
+    private static readonly Meter Meter = new(MeterName, "0.2.14");
 
     /// <summary>
     /// Number of times the inbound hosted service called
