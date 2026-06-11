@@ -72,9 +72,15 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
         {
             try
             {
+                var pollSw = System.Diagnostics.Stopwatch.StartNew();
                 var batch = await storage
                     .ClaimNextAsync(opts.BatchSize, identity, opts.LeaseDuration, stoppingToken)
                     .ConfigureAwait(false);
+                pollSw.Stop();
+                // v0.2.17: ALL cycles emit (including zero-row) because poll latency is
+                // the signal itself - a slow ClaimNextAsync is operator-actionable
+                // regardless of whether the result was empty.
+                OrionPatchDiagnostics.PollDuration.Record(pollSw.Elapsed.TotalMilliseconds);
 
                 if (batch.Count == 0)
                 {
