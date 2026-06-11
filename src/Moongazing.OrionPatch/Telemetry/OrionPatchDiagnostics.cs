@@ -103,4 +103,23 @@ public static class OrionPatchDiagnostics
     /// </summary>
     public static void RecordQueueLag(double milliseconds)
         => QueueLag.Record(System.Math.Max(0d, milliseconds));
+
+    /// <summary>
+    /// v0.2.23 distribution of how many attempts each row took before reaching its
+    /// terminal state (success or dead-letter). Operators graph p99 to spot rows that
+    /// burn most of MaxAttempts before stabilising - a signal that BackoffStrategy
+    /// needs tuning OR that the sink is flapping under specific message types.
+    /// </summary>
+    public static readonly Histogram<int> AttemptsPerRow =
+        Meter.CreateHistogram<int>("orionpatch.outbox.attempts_per_row", unit: "{attempts}");
+
+    /// <summary>Record a row's final attempt count. Public for consumer-owned dispatchers.</summary>
+    public static void RecordAttemptsPerRow(int attempts)
+    {
+        if (attempts <= 0)
+        {
+            return;
+        }
+        AttemptsPerRow.Record(attempts);
+    }
 }

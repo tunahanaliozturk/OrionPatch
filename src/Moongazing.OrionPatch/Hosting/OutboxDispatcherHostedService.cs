@@ -219,6 +219,10 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
             await sink.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
             await storage.CompleteAsync(row.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
             OrionPatchDiagnostics.Dispatched.Add(1);
+            // v0.2.23: per-row terminal attempt count for backoff/sink tuning. Emits
+            // on the success terminal path; dead-letter terminal path emits the same
+            // metric below inside the catch block.
+            OrionPatchDiagnostics.RecordAttemptsPerRow(attempt);
             var elapsedMs = sw.Elapsed.TotalMilliseconds;
             OrionPatchDiagnostics.DispatchDuration.Record(elapsedMs);
             // v0.2.21 queue_lag: recorded AFTER storage.CompleteAsync confirms the
@@ -266,6 +270,10 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                 {
                     await storage.DeadLetterAsync(row.Id, truncated, cancellationToken).ConfigureAwait(false);
                     OrionPatchDiagnostics.DeadLettered.Add(1);
+                    // v0.2.23: dead-letter is also a terminal state; emit per-row
+                    // attempts so the histogram tail reflects both success and
+                    // dead-letter outcomes. attempt at this point equals MaxAttempts.
+                    OrionPatchDiagnostics.RecordAttemptsPerRow(attempt);
                     // v0.2.18 IDeadLetterSink: notify the consumer-registered sink AFTER
                     // the storage state is updated. A throwing sink does NOT roll the
                     // dead-letter back; sink exceptions are logged and swallowed because
