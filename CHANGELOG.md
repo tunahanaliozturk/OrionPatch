@@ -6,6 +6,27 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-06-11
+
+### Added
+
+#### Kafka inbound success-path telemetry
+
+Two new instruments complete the `Moongazing.OrionPatch.Kafka.Inbound` Meter; operators now see attempt + DLQ + success on the same dashboard without log scraping.
+
+- `orionpatch.kafka.inbound.processed` (`Counter<long>`): envelopes the handler returned successfully. Tagged with `topic`.
+- `orionpatch.kafka.inbound.processing_duration_ms` (`Histogram<double>`): wall-clock per `handler.HandleAsync` call. Tagged with `topic`. Operators graph p99 to size handler timeouts.
+- Recorded BEFORE `attemptStore.ClearAsync` (same pattern as v0.2.13 `RecordDlqRouted`) so a transient store outage during cleanup does not undercount the success metric.
+- Public `RecordProcessed` / `RecordProcessingDuration` helpers.
+
+### Tests
+
+2 new facts (x2 TFM).
+
+### Migration from v0.2.13
+
+Source-compatible.
+
 ## [0.2.13] - 2026-06-11
 
 ### Added
