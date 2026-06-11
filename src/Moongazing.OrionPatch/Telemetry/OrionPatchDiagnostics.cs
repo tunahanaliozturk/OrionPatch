@@ -86,4 +86,21 @@ public static class OrionPatchDiagnostics
     public static void RecordDispatchObserverFailure(string exceptionType)
         => DispatchObserverFailures.Add(1,
             new System.Collections.Generic.KeyValuePair<string, object?>("exception_type", exceptionType));
+
+    /// <summary>
+    /// v0.2.21 distribution of per-row dispatch lag in milliseconds (the gap between
+    /// <c>OutboxRow.OccurredAtUtc</c> and successful dispatch). Mirrors v6.5.16
+    /// <c>orionguard.outbox.dispatcher.queue_lag</c> for the Patch dispatcher.
+    /// Operators graph p50/p99 to spot a dispatcher whose queue is backing up before
+    /// the steady-state dispatched-count rate visibly slows.
+    /// </summary>
+    public static readonly Histogram<double> QueueLag =
+        Meter.CreateHistogram<double>("orionpatch.outbox.queue_lag", unit: "ms");
+
+    /// <summary>
+    /// Record one row's queue lag. Negative inputs are clamped to 0 so clock skew across
+    /// enqueue / dispatcher hosts does not pull the histogram p50 down.
+    /// </summary>
+    public static void RecordQueueLag(double milliseconds)
+        => QueueLag.Record(System.Math.Max(0d, milliseconds));
 }

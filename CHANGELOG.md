@@ -6,6 +6,26 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-06-11
+
+### Added
+
+#### `orionpatch.outbox.queue_lag` histogram
+
+`Histogram<double>` of per-row dispatch lag (`OutboxRow.OccurredAtUtc` -> successful dispatch). Mirrors v6.5.16 OrionGuard `orionguard.outbox.dispatcher.queue_lag` for the Patch dispatcher. Operators graph p50/p99 to spot a backing-up queue BEFORE the steady-state dispatched-count rate visibly slows.
+
+- Recorded AFTER `storage.CompleteAsync` (post-commit pattern) so a failed Complete does not cause a double-count when the row is re-dispatched on the next cycle.
+- Negative values clamped to 0 (clock-skew safety).
+- Public `OrionPatchDiagnostics.RecordQueueLag(double)` helper.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.20
+
+Source-compatible.
+
 ## [0.2.20] - 2026-06-11
 
 ### Added

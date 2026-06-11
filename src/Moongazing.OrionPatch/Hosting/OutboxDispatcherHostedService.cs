@@ -221,6 +221,12 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
             OrionPatchDiagnostics.Dispatched.Add(1);
             var elapsedMs = sw.Elapsed.TotalMilliseconds;
             OrionPatchDiagnostics.DispatchDuration.Record(elapsedMs);
+            // v0.2.21 queue_lag: recorded AFTER storage.CompleteAsync confirms the
+            // row's dispatched state is durable. CompleteAsync is its own commit-style
+            // step in OrionPatch (no batching), so 'after CompleteAsync' is the
+            // 'post-commit' moment that prevents the double-count problem the Guard /
+            // Audit packages hit when emitting before SaveChangesAsync.
+            OrionPatchDiagnostics.RecordQueueLag((clock.UtcNow - row.OccurredAtUtc).TotalMilliseconds);
             // v0.2.20 IOutboxDispatchObserver: notify AFTER storage.CompleteAsync so the
             // row is durably marked done before the observer fires. A throwing observer
             // does NOT roll the completion back; observer exceptions are logged + counted
