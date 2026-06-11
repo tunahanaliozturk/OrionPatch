@@ -6,6 +6,32 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-06-11
+
+### Added
+
+#### `KafkaProducerHealthCheck`
+
+`IHealthCheck` that probes the configured Kafka broker by listing its metadata. Returns Healthy when the metadata call returns within `Timeout`, Unhealthy otherwise. Pairs with the outbound producer so the consumer ASP.NET Core `/health` probe downgrades when the broker becomes unreachable BEFORE the outbox starts piling up failed produces.
+
+- `KafkaProducerHealthCheckOptions.Timeout` (default 3 seconds).
+- Reuses `KafkaOutboxSinkOptions.BootstrapServers` so consumers do not configure connection details twice.
+- Lazily initialises an `IAdminClient` and reuses it across probes; the client is disposed when the health check is disposed.
+- `Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions` package reference added (transitive cost minimal).
+
+### Tests
+
+3 facts (x2 TFM).
+
+### Migration from v0.2.14
+
+Source-compatible.
+
+```csharp
+services.AddHealthChecks()
+    .AddCheck<KafkaProducerHealthCheck>("kafka-producer");
+```
+
 ## [0.2.14] - 2026-06-11
 
 ### Added
