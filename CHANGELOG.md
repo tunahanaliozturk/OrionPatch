@@ -6,6 +6,26 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-06-11
+
+### Added
+
+#### `orionpatch.outbox.poll.duration` histogram
+
+`Histogram<double>` measuring `IOutboxStorage.ClaimNextAsync` wall-clock per dispatcher cycle. Operators graph p99 to spot a storage backend that is slow to claim rows.
+
+- ALL cycles emit (including zero-row) because poll latency is the signal itself.
+- Recorded immediately after `ClaimNextAsync` returns, BEFORE the batch_size check.
+- Public on `OrionPatchDiagnostics` so consumer-owned dispatchers can opt in.
+
+### Tests
+
+1 fact (x2 TFM).
+
+### Migration from v0.2.16
+
+Source-compatible.
+
 ## [0.2.16] - 2026-06-11
 
 ### Added
