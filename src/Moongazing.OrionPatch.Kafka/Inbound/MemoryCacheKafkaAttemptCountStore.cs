@@ -47,10 +47,14 @@ public sealed class MemoryCacheKafkaAttemptCountStore : IKafkaAttemptCountStore
         var fromInner = await inner.GetAsync(envelopeId, cancellationToken).ConfigureAwait(false);
         // Only populate the cache when the inner store has a non-default value; caching
         // a 0 for an unseen envelope would prevent the next failure from observing a
-        // 1-count miss if a concurrent writer set the inner side.
+        // 1-count miss if a concurrent writer set the inner side. The AddOrUpdate
+        // closes the race where a concurrent SetAsync wrote a NEWER value between our
+        // inner.GetAsync return and this cache write - if the cache already has a
+        // higher value, keep it; the inner is monotonically increasing per envelope
+        // until ClearAsync.
         if (fromInner > 0)
         {
-            cache[envelopeId] = fromInner;
+            cache.AddOrUpdate(envelopeId, fromInner, (_, existing) => Math.Max(existing, fromInner));
         }
         return fromInner;
     }
@@ -59,7 +63,9 @@ public sealed class MemoryCacheKafkaAttemptCountStore : IKafkaAttemptCountStore
     public async ValueTask SetAsync(Guid envelopeId, int attemptCount, CancellationToken cancellationToken)
     {
         await inner.SetAsync(envelopeId, attemptCount, cancellationToken).ConfigureAwait(false);
-        cache[envelopeId] = attemptCount;
+        // Mirror Get's max-wins merge so a concurrent Get cannot push a stale lower
+        // value over a fresher SetAsync write.
+        cache.AddOrUpdate(envelopeId, attemptCount, (_, existing) => Math.Max(existing, attemptCount));
     }
 
     /// <inheritdoc />
