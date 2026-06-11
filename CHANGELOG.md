@@ -6,6 +6,20 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.22] - 2026-06-11
+
+### Fixed
+
+#### Publish missing sibling packages (Kafka, RabbitMQ, AzureServiceBus)
+
+The CI/CD release workflow only packed `OrionPatch`, `OrionPatch.EntityFrameworkCore`, and `OrionPatch.Testing`. The sibling sink packages were never published despite `OrionPatch.EntityFrameworkCore` carrying a project reference to `OrionPatch.Kafka` (for `EfCoreKafkaAttemptCountStore`). Every downstream consumer hit `NU1101: Unable to find package OrionPatch.Kafka` on restore.
+
+v0.2.22 adds the three missing packs so the transitive dependency resolves.
+
+### Migration from v0.2.21
+
+Source-compatible.
+
 ## [0.2.21] - 2026-06-11
 
 ### Added
