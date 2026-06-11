@@ -35,6 +35,10 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
     // v0.2.18 consumer-supplied dead-letter observer. Optional - null/NullDeadLetterSink
     // is the back-compat default that v0.2.17 consumers see.
     private readonly IDeadLetterSink? deadLetterSink;
+    // v0.2.20 consumer-supplied success observer. Same null-or-Null convention as the
+    // v0.2.18 dead-letter sink: null and NullOutboxDispatchObserver are both treated as
+    // 'no observer' so we skip the call entirely (no allocation, no scheduling).
+    private readonly IOutboxDispatchObserver? dispatchObserver;
 
     /// <summary>Create the dispatcher with its storage, sink, options, clock, and logger.</summary>
     /// <param name="storage">Outbox row store.</param>
@@ -49,7 +53,7 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
         IOptions<OrionPatchOptions> options,
         IOutboxDispatcherClock clock,
         ILogger<OutboxDispatcherHostedService> logger)
-        : this(storage, sink, options, clock, logger, deadLetterSink: null)
+        : this(storage, sink, options, clock, logger, deadLetterSink: null, dispatchObserver: null)
     {
     }
 
@@ -61,6 +65,22 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
         IOutboxDispatcherClock clock,
         ILogger<OutboxDispatcherHostedService> logger,
         IDeadLetterSink? deadLetterSink)
+        : this(storage, sink, options, clock, logger, deadLetterSink, dispatchObserver: null)
+    {
+    }
+
+    /// <summary>
+    /// v0.2.20 7-arg overload that wires the optional <see cref="IOutboxDispatchObserver"/>
+    /// alongside the dead-letter sink. Existing 5-arg and 6-arg ctors continue to work.
+    /// </summary>
+    public OutboxDispatcherHostedService(
+        IOutboxStorage storage,
+        IOutboxSink sink,
+        IOptions<OrionPatchOptions> options,
+        IOutboxDispatcherClock clock,
+        ILogger<OutboxDispatcherHostedService> logger,
+        IDeadLetterSink? deadLetterSink,
+        IOutboxDispatchObserver? dispatchObserver)
     {
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(sink);
@@ -73,6 +93,7 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
         this.clock = clock;
         this.logger = logger;
         this.deadLetterSink = deadLetterSink;
+        this.dispatchObserver = dispatchObserver is NullOutboxDispatchObserver ? null : dispatchObserver;
     }
 
     private static OutboxEnvelope? TryBuildEnvelope(OutboxRow row, OrionPatchOptions opts)
@@ -98,6 +119,10 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
     [LoggerMessage(EventId = 4001, Level = LogLevel.Warning,
         Message = "Dead-letter sink failed for outbox row {RowId}; dead-letter state is already persisted.")]
     private partial void LogDeadLetterSinkFailed(System.Guid rowId, System.Exception exception);
+
+    [LoggerMessage(EventId = 4002, Level = LogLevel.Warning,
+        Message = "Dispatch observer failed for outbox row {RowId}; completed state is already persisted.")]
+    private partial void LogDispatchObserverFailed(System.Guid rowId, System.Exception exception);
 
     /// <summary>
     /// Runs the claim-dispatch-complete loop until the host requests shutdown.
@@ -194,7 +219,33 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
             await sink.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
             await storage.CompleteAsync(row.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
             OrionPatchDiagnostics.Dispatched.Add(1);
-            OrionPatchDiagnostics.DispatchDuration.Record(sw.Elapsed.TotalMilliseconds);
+            var elapsedMs = sw.Elapsed.TotalMilliseconds;
+            OrionPatchDiagnostics.DispatchDuration.Record(elapsedMs);
+            // v0.2.20 IOutboxDispatchObserver: notify AFTER storage.CompleteAsync so the
+            // row is durably marked done before the observer fires. A throwing observer
+            // does NOT roll the completion back; observer exceptions are logged + counted
+            // by the v0.2.19 dead_letter_sink_failures shape (we reuse RecordDeadLetterSinkFailure
+            // because the semantic is identical: 'a consumer hook misbehaved, db is correct').
+            var observerRef = dispatchObserver;
+            if (observerRef is not null)
+            {
+                try
+                {
+                    await observerRef.OnDispatchedAsync(envelope, attempt, elapsedMs, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+#pragma warning disable CA1031
+                catch (Exception observerEx)
+#pragma warning restore CA1031
+                {
+                    OrionPatchDiagnostics.RecordDispatchObserverFailure(observerEx.GetType().Name);
+                    LogDispatchObserverFailed(row.Id, observerEx);
+                }
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

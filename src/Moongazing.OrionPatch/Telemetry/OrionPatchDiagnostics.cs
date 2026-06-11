@@ -71,4 +71,19 @@ public static class OrionPatchDiagnostics
     public static void RecordDeadLetterSinkFailure(string exceptionType)
         => DeadLetterSinkFailures.Add(1,
             new System.Collections.Generic.KeyValuePair<string, object?>("exception_type", exceptionType));
+
+    /// <summary>
+    /// v0.2.20 counter for the v0.2.20 <see cref="Abstractions.IOutboxDispatchObserver"/>
+    /// failures. Mirrors the v0.2.19 dead-letter-sink failures counter on the success
+    /// observer path. The row is already completed (db state is correct); this counter
+    /// is purely operator-facing alerting for "your success-observer is misbehaving".
+    /// Tagged with <c>exception_type</c>.
+    /// </summary>
+    public static readonly Counter<long> DispatchObserverFailures =
+        Meter.CreateCounter<long>("orionpatch.outbox.dispatch_observer_failures", unit: "{failures}");
+
+    /// <summary>Record a dispatch-observer failure tagged with the exception type.</summary>
+    public static void RecordDispatchObserverFailure(string exceptionType)
+        => DispatchObserverFailures.Add(1,
+            new System.Collections.Generic.KeyValuePair<string, object?>("exception_type", exceptionType));
 }
