@@ -206,9 +206,14 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
             {
                 if (await TryDeadLetterAsync(envelopeId, result, attemptCount, ex, stoppingToken).ConfigureAwait(false))
                 {
+                    // v0.2.13: count the DLQ route BEFORE ClearAsync runs. The producer
+                    // has already succeeded so the metric should reflect the write that
+                    // landed - even if ClearAsync throws during a persistent attempt-store
+                    // outage, the dlq_routed counter must not undercount the DLQ write
+                    // operators actually paid for.
+                    KafkaInboundDiagnostics.RecordDlqRouted(topic, options.DeadLetterTopic!);
                     await attemptStore.ClearAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
                     LogDeadLettered(envelopeId, options.DeadLetterTopic!, attemptCount, topic, partition, offset);
-                    KafkaInboundDiagnostics.RecordDlqRouted(topic, options.DeadLetterTopic!);
                     TryCommit(consumer, result);
                     return;
                 }
