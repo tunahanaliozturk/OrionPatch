@@ -6,6 +6,35 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-06-11
+
+### Added
+
+#### `IOutboxDispatchObserver` success-path extensibility
+
+Consumer-supplied observer invoked AFTER a row is successfully dispatched (sink + storage complete). Mirror of v0.2.18 `IDeadLetterSink` on the success side. Useful for per-message audit trails or downstream fan-out for confirmed deliveries.
+
+- `IOutboxDispatchObserver` interface in `Moongazing.OrionPatch.Abstractions`.
+- `NullOutboxDispatchObserver` no-op default.
+- New 7-arg ctor wires observer; 5/6-arg legacy ctors preserved.
+- Observer fires AFTER `storage.CompleteAsync`; throwing observer does NOT roll back; exceptions counted via new `orionpatch.outbox.dispatch_observer_failures` and logged.
+
+#### `orionpatch.outbox.dispatch_observer_failures` counter
+
+`Counter<long>` tagged with `exception_type`. Operator-facing alert for misbehaving observers.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.19
+
+Source-compatible.
+
+```csharp
+services.AddSingleton<IOutboxDispatchObserver, MyObserver>();
+```
+
 ## [0.2.19] - 2026-06-11
 
 ### Added
