@@ -183,6 +183,7 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
                 var previousCount = await attemptStore.GetAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
                 attemptCount = previousCount + 1;
                 await attemptStore.SetAsync(envelopeId, attemptCount, CancellationToken.None).ConfigureAwait(false);
+                KafkaInboundDiagnostics.RecordAttemptSet(topic);
             }
 #pragma warning disable CA1031
             catch
@@ -207,6 +208,7 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
                 {
                     await attemptStore.ClearAsync(envelopeId, CancellationToken.None).ConfigureAwait(false);
                     LogDeadLettered(envelopeId, options.DeadLetterTopic!, attemptCount, topic, partition, offset);
+                    KafkaInboundDiagnostics.RecordDlqRouted(topic, options.DeadLetterTopic!);
                     TryCommit(consumer, result);
                     return;
                 }
