@@ -154,7 +154,14 @@ public sealed partial class KafkaInboundHostedService : BackgroundService
 
         try
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             await handler.HandleAsync(message, stoppingToken).ConfigureAwait(false);
+            sw.Stop();
+            // v0.2.14: record success metrics BEFORE ClearAsync so a transient attempt-store
+            // failure during cleanup does not undercount the handler invocations operators
+            // can see succeeded (same pattern as v0.2.13 RecordDlqRouted ordering).
+            KafkaInboundDiagnostics.RecordProcessed(topic);
+            KafkaInboundDiagnostics.RecordProcessingDuration(topic, sw.Elapsed.TotalMilliseconds);
             await attemptStore.ClearAsync(envelopeId, stoppingToken).ConfigureAwait(false);
             TryCommit(consumer, result);
         }

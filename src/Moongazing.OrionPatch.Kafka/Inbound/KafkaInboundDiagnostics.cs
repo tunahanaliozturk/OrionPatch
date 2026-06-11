@@ -31,6 +31,22 @@ public static class KafkaInboundDiagnostics
     internal static readonly Counter<long> DlqRouted = Meter.CreateCounter<long>(
         "orionpatch.kafka.inbound.dlq_routed");
 
+    /// <summary>
+    /// v0.2.14 success-path counter: envelopes the handler returned successfully and the
+    /// inbox accepted (no duplicate, no DLQ). Pairs with `attempt_set` and `dlq_routed`
+    /// to give operators the success/failure ratio without log scraping. Tagged with
+    /// <c>topic</c>.
+    /// </summary>
+    internal static readonly Counter<long> Processed = Meter.CreateCounter<long>(
+        "orionpatch.kafka.inbound.processed");
+
+    /// <summary>
+    /// v0.2.14 distribution of per-message handler duration (handler.HandleAsync wall-clock).
+    /// Operators graph p99 to size handler timeouts and spot tail-latency regressions.
+    /// </summary>
+    internal static readonly Histogram<double> ProcessingDuration = Meter.CreateHistogram<double>(
+        "orionpatch.kafka.inbound.processing_duration_ms");
+
     /// <summary>Record a single attempt-store bump; tagged with the source topic.</summary>
     public static void RecordAttemptSet(string topic)
         => AttemptSet.Add(1, new System.Collections.Generic.KeyValuePair<string, object?>("topic", topic));
@@ -40,4 +56,12 @@ public static class KafkaInboundDiagnostics
         => DlqRouted.Add(1,
             new System.Collections.Generic.KeyValuePair<string, object?>("topic", sourceTopic),
             new System.Collections.Generic.KeyValuePair<string, object?>("dlq", dlqTopic));
+
+    /// <summary>Record a single successful handler invocation; tagged with the source topic.</summary>
+    public static void RecordProcessed(string topic)
+        => Processed.Add(1, new System.Collections.Generic.KeyValuePair<string, object?>("topic", topic));
+
+    /// <summary>Record handler wall-clock duration in milliseconds; tagged with the source topic.</summary>
+    public static void RecordProcessingDuration(string topic, double milliseconds)
+        => ProcessingDuration.Record(milliseconds, new System.Collections.Generic.KeyValuePair<string, object?>("topic", topic));
 }
