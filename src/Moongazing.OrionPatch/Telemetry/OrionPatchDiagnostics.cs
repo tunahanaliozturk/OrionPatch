@@ -37,4 +37,14 @@ public static class OrionPatchDiagnostics
     /// <summary>Per-envelope sink dispatch duration in milliseconds.</summary>
     public static readonly Histogram<double> DispatchDuration =
         Meter.CreateHistogram<double>("orionpatch.outbox.dispatch.duration", unit: "ms");
+
+    /// <summary>
+    /// v0.2.16 distribution of rows claimed per dispatcher cycle. Operators graph p99
+    /// to spot a dispatcher that is consistently maxing out <c>BatchSize</c> (a sign
+    /// that throughput is bottlenecked and the batch should be raised) or staying near
+    /// 0 (a sign that polling cadence is over-sized for the actual traffic).
+    /// Zero-row cycles do NOT emit.
+    /// </summary>
+    public static readonly Histogram<int> BatchSize =
+        Meter.CreateHistogram<int>("orionpatch.outbox.batch_size", unit: "{rows}");
 }
