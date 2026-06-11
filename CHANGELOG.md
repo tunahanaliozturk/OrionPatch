@@ -6,6 +6,26 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-06-11
+
+### Added
+
+#### Kafka inbound OTel counters
+
+Two new counters exposed via the new `Moongazing.OrionPatch.Kafka.Inbound` Meter. Operators wire these into Grafana to visualise redelivery storms and per-route DLQ patterns instead of scraping log messages.
+
+- `orionpatch.kafka.inbound.attempt_set` (`Counter<long>`): incremented on every `IKafkaAttemptCountStore.SetAsync` call from the inbound consumer. Tagged with `topic`.
+- `orionpatch.kafka.inbound.dlq_routed` (`Counter<long>`): incremented once per envelope routed to the configured DLQ topic. Tagged with `topic` (source) AND `dlq` (destination) so multi-route deployments can split alarms.
+- `KafkaInboundDiagnostics.RecordAttemptSet` / `RecordDlqRouted` public so consumer-owned DLQ producers can opt in.
+
+### Tests
+
+2 new facts (x2 TFM).
+
+### Migration from v0.2.12
+
+Source-compatible.
+
 ## [0.2.12] - 2026-06-11
 
 ### Added
