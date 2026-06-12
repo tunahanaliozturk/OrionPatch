@@ -146,6 +146,12 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                 // the signal itself - a slow ClaimNextAsync is operator-actionable
                 // regardless of whether the result was empty.
                 OrionPatchDiagnostics.PollDuration.Record(pollSw.Elapsed.TotalMilliseconds);
+                // v0.2.26: queue depth snapshot on EVERY cycle (zero-row included) so
+                // the gauge reflects backlog even when nothing is dispatchable yet
+                // (e.g. rows scheduled in the future). Lesson from v0.7.23 Audit codex
+                // P2: snapshotting only the non-empty path leaves the gauge stale.
+                OrionPatchDiagnostics.SetQueueDepth(
+                    await storage.QueueDepthAsync(stoppingToken).ConfigureAwait(false));
 
                 if (batch.Count == 0)
                 {
