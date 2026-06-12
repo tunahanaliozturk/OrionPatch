@@ -6,6 +6,25 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.24] - 2026-06-12
+
+### Added
+
+#### `orionpatch.outbox.dispatch.envelope_bytes` histogram
+
+`Histogram<int>` of dispatched envelope payload byte size (the JSON `Payload` string length). Operators graph p99 to spot a message-type whose payload grew suddenly and to size storage column types / broker frame limits against actual byte shape.
+
+- Recorded only on the success path (after `sink.SendAsync` + `storage.CompleteAsync` succeed) so failed dispatches do not skew the distribution.
+- Zero/negative inputs ignored.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.23
+
+Source-compatible.
+
 ## [0.2.23] - 2026-06-11
 
 ### Added

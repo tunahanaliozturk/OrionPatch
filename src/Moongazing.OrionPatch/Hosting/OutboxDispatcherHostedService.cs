@@ -223,6 +223,16 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
             // on the success terminal path; dead-letter terminal path emits the same
             // metric below inside the catch block.
             OrionPatchDiagnostics.RecordAttemptsPerRow(attempt);
+            // v0.2.24: per-envelope payload byte size on the success path. Recorded
+            // here (after sink.SendAsync + storage.CompleteAsync succeed) so failed
+            // dispatches do not skew the distribution.
+            // v0.2.24 fix (codex P2 + coderabbit Major): record actual UTF-8 byte count
+            // rather than UTF-16 char count. The dispatch sinks (Kafka, RabbitMQ,
+            // AzureServiceBus) build frames with Encoding.UTF8.GetBytes(Payload), so
+            // char-length under-reports for non-ASCII payloads (the euro sign and
+            // emoji span multiple UTF-8 bytes each).
+            OrionPatchDiagnostics.RecordEnvelopeBytes(
+                string.IsNullOrEmpty(row.Payload) ? 0 : System.Text.Encoding.UTF8.GetByteCount(row.Payload));
             var elapsedMs = sw.Elapsed.TotalMilliseconds;
             OrionPatchDiagnostics.DispatchDuration.Record(elapsedMs);
             // v0.2.21 queue_lag: recorded AFTER storage.CompleteAsync confirms the
