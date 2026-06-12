@@ -122,4 +122,25 @@ public static class OrionPatchDiagnostics
         }
         AttemptsPerRow.Record(attempts);
     }
+
+    /// <summary>
+    /// v0.2.24 distribution of dispatched envelope payload size in bytes (the JSON
+    /// Payload string length). Operators graph p99 to spot a message-type whose
+    /// payload grew suddenly (regression in the producer, accidental large fan-out)
+    /// and to size storage column types / broker frame limits against actual byte
+    /// shape rather than guessing. Recorded on the success path so failed sends do
+    /// not skew the distribution.
+    /// </summary>
+    public static readonly Histogram<int> EnvelopeBytes =
+        Meter.CreateHistogram<int>("orionpatch.outbox.dispatch.envelope_bytes", unit: "By");
+
+    /// <summary>Record a successfully-dispatched envelope's payload byte length.</summary>
+    public static void RecordEnvelopeBytes(int bytes)
+    {
+        if (bytes <= 0)
+        {
+            return;
+        }
+        EnvelopeBytes.Record(bytes);
+    }
 }

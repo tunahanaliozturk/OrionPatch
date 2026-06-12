@@ -223,6 +223,10 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
             // on the success terminal path; dead-letter terminal path emits the same
             // metric below inside the catch block.
             OrionPatchDiagnostics.RecordAttemptsPerRow(attempt);
+            // v0.2.24: per-envelope payload byte size on the success path. Recorded
+            // here (after sink.SendAsync + storage.CompleteAsync succeed) so failed
+            // dispatches do not skew the distribution.
+            OrionPatchDiagnostics.RecordEnvelopeBytes(row.Payload?.Length ?? 0);
             var elapsedMs = sw.Elapsed.TotalMilliseconds;
             OrionPatchDiagnostics.DispatchDuration.Record(elapsedMs);
             // v0.2.21 queue_lag: recorded AFTER storage.CompleteAsync confirms the
