@@ -6,6 +6,26 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.25] - 2026-06-12
+
+### Added
+
+#### `orionpatch.outbox.sink.duration_ms` histogram
+
+`Histogram<double>` measuring `IOutboxSink.SendAsync` wall-clock per envelope. Isolates the broker / downstream call cost from the existing `dispatch.duration` which covers the full `DispatchOneAsync` method (deserialise + envelope build + sink + complete + housekeeping).
+
+- try/finally so a slow failing sink (broker timeout, downstream 5xx) still emits the sample - the most operator-relevant tail.
+- Negative values clamped to 0 (clock-skew safety).
+- Public `OrionPatchDiagnostics.RecordSinkDuration(double)` helper.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.24
+
+Source-compatible.
+
 ## [0.2.24] - 2026-06-12
 
 ### Added

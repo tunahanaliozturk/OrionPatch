@@ -216,7 +216,19 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                 row.OccurredAtUtc,
                 attempt);
 
-            await sink.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
+            // v0.2.25: time the sink call to isolate broker/downstream cost from the
+            // full DispatchOneAsync wall-clock. try/finally so a slow failing sink
+            // (broker timeout, downstream 5xx) still emits the sample.
+            var sinkSw = Stopwatch.StartNew();
+            try
+            {
+                await sink.SendAsync(envelope, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                sinkSw.Stop();
+                OrionPatchDiagnostics.RecordSinkDuration(sinkSw.Elapsed.TotalMilliseconds);
+            }
             await storage.CompleteAsync(row.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
             OrionPatchDiagnostics.Dispatched.Add(1);
             // v0.2.23: per-row terminal attempt count for backoff/sink tuning. Emits
