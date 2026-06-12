@@ -143,4 +143,18 @@ public static class OrionPatchDiagnostics
         }
         EnvelopeBytes.Record(bytes);
     }
+
+    /// <summary>
+    /// v0.2.25 distribution of <c>IOutboxSink.SendAsync</c> wall-clock per envelope.
+    /// Operators graph p99 to isolate the broker / downstream call cost from the
+    /// existing <c>dispatch.duration</c> which covers EVERYTHING (deserialize +
+    /// envelope build + sink + complete). try/finally so a slow failing sink still
+    /// emits the sample.
+    /// </summary>
+    public static readonly Histogram<double> SinkDuration =
+        Meter.CreateHistogram<double>("orionpatch.outbox.sink.duration_ms", unit: "ms");
+
+    /// <summary>Record a sink call's wall-clock. Negatives clamped to 0.</summary>
+    public static void RecordSinkDuration(double milliseconds)
+        => SinkDuration.Record(System.Math.Max(0d, milliseconds));
 }
