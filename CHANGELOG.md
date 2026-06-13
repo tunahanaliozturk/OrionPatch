@@ -6,6 +6,27 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.27] - 2026-06-13
+
+### Added
+
+#### `orionpatch.outbox.claim.batch_fill_ratio` histogram
+
+`Histogram<double>` of claimed rows / configured `BatchSize` as a 0..1 ratio. Operators graph p99 to right-size `BatchSize` WITHOUT knowing the configured value out-of-band:
+
+- Ratio near 1.0 = the dispatcher is BatchSize-bound (raise it for throughput).
+- Ratio near 0 = BatchSize is over-provisioned for the actual backlog.
+
+The absolute v0.2.16 `batch_size` histogram cannot answer this on its own (a p99 of 80 means nothing without knowing whether BatchSize is 100 or 1000). Only non-empty claims emit; over-claims are clamped to 1.0.
+
+### Tests
+
+4 facts.
+
+### Migration from v0.2.26
+
+Source-compatible.
+
 ## [0.2.26] - 2026-06-12
 
 ### Added
