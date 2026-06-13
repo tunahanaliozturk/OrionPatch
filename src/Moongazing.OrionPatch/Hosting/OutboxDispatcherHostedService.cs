@@ -124,6 +124,10 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
         Message = "Dispatch observer failed for outbox row {RowId}; completed state is already persisted.")]
     private partial void LogDispatchObserverFailed(System.Guid rowId, System.Exception exception);
 
+    [LoggerMessage(EventId = 4003, Level = LogLevel.Warning,
+        Message = "OrionPatch queue-depth telemetry query failed; gauge left stale, dispatch continues.")]
+    private partial void LogQueueDepthQueryFailed(System.Exception exception);
+
     /// <summary>
     /// Runs the claim-dispatch-complete loop until the host requests shutdown.
     /// </summary>
@@ -167,8 +171,7 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                 catch (Exception depthEx)
 #pragma warning restore CA1031
                 {
-                    logger.LogWarning(depthEx,
-                        "OrionPatch queue-depth telemetry query failed; gauge left stale, dispatch continues.");
+                    LogQueueDepthQueryFailed(depthEx);
                 }
 
                 if (batch.Count == 0)
