@@ -147,11 +147,29 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                 // regardless of whether the result was empty.
                 OrionPatchDiagnostics.PollDuration.Record(pollSw.Elapsed.TotalMilliseconds);
                 // v0.2.26: queue depth snapshot on EVERY cycle (zero-row included) so
-                // the gauge reflects backlog even when nothing is dispatchable yet
-                // (e.g. rows scheduled in the future). Lesson from v0.7.23 Audit codex
-                // P2: snapshotting only the non-empty path leaves the gauge stale.
-                OrionPatchDiagnostics.SetQueueDepth(
-                    await storage.QueueDepthAsync(stoppingToken).ConfigureAwait(false));
+                // the gauge reflects backlog even when nothing is dispatchable yet.
+                // v0.2.26 fix (codex P1 + coderabbit Major): the depth query is TELEMETRY
+                // and must NEVER block the dispatch path. If QueueDepthAsync throws or
+                // times out after ClaimNextAsync already claimed rows, the outer catch
+                // would back off and leave those rows stuck in Claimed until their
+                // leases expire. Wrap in try/catch so a depth-query failure degrades the
+                // gauge (stale value) without delaying delivery of the claimed batch.
+                try
+                {
+                    OrionPatchDiagnostics.SetQueueDepth(
+                        await storage.QueueDepthAsync(stoppingToken).ConfigureAwait(false));
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+#pragma warning disable CA1031
+                catch (Exception depthEx)
+#pragma warning restore CA1031
+                {
+                    logger.LogWarning(depthEx,
+                        "OrionPatch queue-depth telemetry query failed; gauge left stale, dispatch continues.");
+                }
 
                 if (batch.Count == 0)
                 {
