@@ -6,6 +6,26 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.26] - 2026-06-12
+
+### Added
+
+#### `orionpatch.outbox.queue_depth` ObservableGauge
+
+`ObservableGauge<long>` reports pending outbox rows awaiting dispatch, as last observed by the dispatcher via `IOutboxStorage.QueueDepthAsync`. Operators alert on sustained growth (dispatcher cannot keep up with producers). Mirrors the OrionAudit `capture.queue_depth` shape so both outbox families expose the same liveness gauge.
+
+- Snapshotted on EVERY cycle including zero-row (the v0.7.23 Audit lesson: non-empty-only snapshots leave the gauge stale).
+- 0 until the first dispatch cycle completes.
+- Public `OrionPatchDiagnostics.SetQueueDepth(long)` for consumer-owned dispatchers.
+
+### Tests
+
+1 fact (x2 TFM).
+
+### Migration from v0.2.25
+
+Source-compatible.
+
 ## [0.2.25] - 2026-06-12
 
 ### Added

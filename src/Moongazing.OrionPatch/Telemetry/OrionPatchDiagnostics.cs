@@ -157,4 +157,24 @@ public static class OrionPatchDiagnostics
     /// <summary>Record a sink call's wall-clock. Negatives clamped to 0.</summary>
     public static void RecordSinkDuration(double milliseconds)
         => SinkDuration.Record(System.Math.Max(0d, milliseconds));
+
+    // v0.2.26 queue depth snapshot, fed by the dispatcher each poll cycle via
+    // IOutboxStorage.QueueDepthAsync. Mirrors v0.7.x OrionAudit queue_depth so the
+    // two outbox families expose the same liveness shape.
+    private static long queueDepth;
+
+    /// <summary>v0.2.26: update the queue depth snapshot. Dispatchers call once per cycle.</summary>
+    public static void SetQueueDepth(long depth)
+        => System.Threading.Interlocked.Exchange(ref queueDepth, depth);
+
+    /// <summary>
+    /// v0.2.26 pending-row gauge. Reports the most recent dispatcher observation of
+    /// <c>IOutboxStorage.QueueDepthAsync</c>; 0 until the first cycle completes.
+    /// Operators alert on sustained growth (dispatcher cannot keep up with producers).
+    /// </summary>
+    public static readonly ObservableGauge<long> QueueDepth = Meter.CreateObservableGauge<long>(
+        "orionpatch.outbox.queue_depth",
+        () => System.Threading.Interlocked.Read(ref queueDepth),
+        unit: "{rows}",
+        description: "Pending outbox rows awaiting dispatch, as last observed by the dispatcher.");
 }
