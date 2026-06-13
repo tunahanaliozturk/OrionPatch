@@ -182,6 +182,9 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                 // v0.2.16 batch-size histogram: zero-row cycles do NOT emit so the
                 // histogram tail reflects actual produced batches, not idle polling.
                 OrionPatchDiagnostics.BatchSize.Record(batch.Count);
+                // v0.2.27: batch fill ratio (claimed / configured BatchSize) so
+                // operators can right-size BatchSize without knowing it out-of-band.
+                OrionPatchDiagnostics.RecordClaimBatchFillRatio(batch.Count, opts.BatchSize);
 
                 foreach (var row in batch)
                 {

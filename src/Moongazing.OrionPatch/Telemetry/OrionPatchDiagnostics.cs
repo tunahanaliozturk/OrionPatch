@@ -158,6 +158,29 @@ public static class OrionPatchDiagnostics
     public static void RecordSinkDuration(double milliseconds)
         => SinkDuration.Record(System.Math.Max(0d, milliseconds));
 
+    /// <summary>
+    /// v0.2.27 distribution of the claim batch fill ratio: claimed rows divided by the
+    /// configured BatchSize, as a 0..1 double. Operators graph p99 to right-size
+    /// BatchSize: a ratio steadily near 1.0 means the dispatcher is BatchSize-bound
+    /// (raise it for throughput), while a ratio steadily near 0 means BatchSize is
+    /// over-provisioned for the actual backlog (the absolute batch_size histogram
+    /// cannot answer this without the operator knowing the configured BatchSize).
+    /// Only non-empty claims emit.
+    /// </summary>
+    public static readonly Histogram<double> ClaimBatchFillRatio =
+        Meter.CreateHistogram<double>("orionpatch.outbox.claim.batch_fill_ratio", unit: "1");
+
+    /// <summary>Record a claim's fill ratio (claimed / batchSize). Clamped to [0, 1].</summary>
+    public static void RecordClaimBatchFillRatio(int claimed, int batchSize)
+    {
+        if (claimed <= 0 || batchSize <= 0)
+        {
+            return;
+        }
+        var ratio = (double)claimed / batchSize;
+        ClaimBatchFillRatio.Record(ratio > 1d ? 1d : ratio);
+    }
+
     // v0.2.26 queue depth snapshot, fed by the dispatcher each poll cycle via
     // IOutboxStorage.QueueDepthAsync. Mirrors v0.7.x OrionAudit queue_depth so the
     // two outbox families expose the same liveness shape.
