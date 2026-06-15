@@ -120,6 +120,25 @@ public static class OrionPatchDiagnostics
         => QueueLag.Record(System.Math.Max(0d, milliseconds));
 
     /// <summary>
+    /// v0.2.29 distribution of how long a row spent in the outbox before it was dead-lettered
+    /// (the gap between <c>OutboxRow.EnqueuedAtUtc</c> and the moment it exhausted
+    /// <c>MaxAttempts</c>). The failure-path analog to the v0.2.21 <c>queue_lag</c> success
+    /// histogram. Operators graph p99 to tune the retry policy: a dead-letter age that tracks
+    /// <c>MaxAttempts</c> x the backoff schedule means rows are exhausting genuine transient
+    /// retries, whereas a much shorter age means rows are failing fast on terminal errors and the
+    /// retry budget is being spent pointlessly.
+    /// </summary>
+    public static readonly Histogram<double> DeadLetterAge =
+        Meter.CreateHistogram<double>("orionpatch.outbox.dead_letter.age_ms", unit: "ms");
+
+    /// <summary>
+    /// Record the outbox dwell time of a dead-lettered row. Negative inputs are clamped to 0 so
+    /// clock skew across enqueue / dispatcher hosts does not pull the histogram p50 down.
+    /// </summary>
+    public static void RecordDeadLetterAge(double milliseconds)
+        => DeadLetterAge.Record(System.Math.Max(0d, milliseconds));
+
+    /// <summary>
     /// v0.2.23 distribution of how many attempts each row took before reaching its
     /// terminal state (success or dead-letter). Operators graph p99 to spot rows that
     /// burn most of MaxAttempts before stabilising - a signal that BackoffStrategy
