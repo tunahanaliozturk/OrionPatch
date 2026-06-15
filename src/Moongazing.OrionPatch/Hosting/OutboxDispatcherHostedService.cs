@@ -325,6 +325,11 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                 {
                     await storage.DeadLetterAsync(row.Id, truncated, cancellationToken).ConfigureAwait(false);
                     OrionPatchDiagnostics.DeadLettered.Add(1);
+                    // v0.2.29: record the outbox dwell time (enqueue -> dead-letter) AFTER the
+                    // terminal state is persisted, the failure-path analog to the v0.2.21
+                    // queue_lag success histogram. Emitted post-persist so a DeadLetterAsync
+                    // failure does not record an age for a row that was not actually abandoned.
+                    OrionPatchDiagnostics.RecordDeadLetterAge((clock.UtcNow - row.EnqueuedAtUtc).TotalMilliseconds);
                     // v0.2.23: dead-letter is also a terminal state; emit per-row
                     // attempts so the histogram tail reflects both success and
                     // dead-letter outcomes. attempt at this point equals MaxAttempts.

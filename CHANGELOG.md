@@ -6,6 +6,22 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.29] - 2026-06-15
+
+### Added
+
+#### `orionpatch.outbox.dead_letter.age_ms` histogram
+
+`Histogram<double>` records how long a row spent in the outbox before it was dead-lettered (the gap between `OutboxRow.EnqueuedAtUtc` and the moment it exhausted `MaxAttempts`). It is the failure-path analog to the v0.2.21 `queue_lag` success histogram.
+
+- Operators graph p99 to tune the retry policy: a dead-letter age that tracks `MaxAttempts` x the backoff schedule means rows are exhausting genuine transient retries, whereas a much shorter age means rows are failing fast on terminal errors and the retry budget is being spent pointlessly.
+- Recorded post-persist (after `DeadLetterAsync`), alongside the existing `deadlettered` counter, so a storage failure that leaves the row un-abandoned does not record a spurious age. Negative inputs are clamped to 0 for clock skew.
+- Public `OrionPatchDiagnostics.RecordDeadLetterAge(double)` helper.
+
+### Tests
+
+- `DeadLetterAgeHistogramTests`: emits for a positive age, clamps a negative to 0.
+
 ## [0.2.28] - 2026-06-15
 
 ### Added
