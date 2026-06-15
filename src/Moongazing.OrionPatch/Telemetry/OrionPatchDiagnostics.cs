@@ -58,6 +58,21 @@ public static class OrionPatchDiagnostics
         Meter.CreateHistogram<double>("orionpatch.outbox.poll.duration", unit: "ms");
 
     /// <summary>
+    /// v0.2.28 idle-poll counter. Increments each dispatcher cycle that claims an empty batch
+    /// (the backlog was empty). Operators graph the idle-poll rate against the total poll rate
+    /// to answer "is the dispatcher polling too often for the actual traffic? raise
+    /// PollingInterval" - a high idle fraction is a cost-of-poll signal, while a low fraction
+    /// means the dispatcher is busy and BatchSize may need raising instead. Pairs with the
+    /// v0.2.16 batch_size histogram, which deliberately skips these zero-row cycles. Mirrors the
+    /// Guard v6.5.17 poll.idle counter on the Patch side.
+    /// </summary>
+    public static readonly Counter<long> IdlePolls =
+        Meter.CreateCounter<long>("orionpatch.outbox.poll.idle", unit: "{polls}");
+
+    /// <summary>Record one idle poll (empty-backlog cycle). Public for consumer-owned dispatchers.</summary>
+    public static void RecordIdlePoll() => IdlePolls.Add(1);
+
+    /// <summary>
     /// v0.2.19 counter for the v0.2.18 <see cref="Abstractions.IDeadLetterSink"/>
     /// observer faults. Increments each time the sink throws; the dead-letter database
     /// state is still applied (the sink is observability, not load-bearing) so this

@@ -176,6 +176,9 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
 
                 if (batch.Count == 0)
                 {
+                    // v0.2.28: count the empty-backlog cycle so operators can graph the idle-poll
+                    // fraction and right-size PollingInterval.
+                    OrionPatchDiagnostics.RecordIdlePoll();
                     await clock.DelayAsync(opts.PollingInterval, stoppingToken).ConfigureAwait(false);
                     continue;
                 }
