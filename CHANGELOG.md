@@ -6,6 +6,22 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.28] - 2026-06-15
+
+### Added
+
+#### `orionpatch.outbox.poll.idle` counter
+
+`Counter<long>` increments on each dispatcher cycle that claims an empty batch (the backlog was empty). Operators graph the idle-poll rate against the total poll rate to right-size `PollingInterval`: a high idle fraction is a cost-of-poll signal, while a low fraction means the dispatcher is busy and `BatchSize` may need raising instead.
+
+- Pairs with the v0.2.16 `batch_size` histogram, which deliberately skips these zero-row cycles.
+- Public `OrionPatchDiagnostics.RecordIdlePoll()` helper.
+- Mirrors the Guard v6.5.17 `poll.idle` counter on the Patch side.
+
+### Tests
+
+- `IdlePollCounterTests`: `RecordIdlePoll` increments the counter.
+
 ## [0.2.27] - 2026-06-13
 
 ### Added
