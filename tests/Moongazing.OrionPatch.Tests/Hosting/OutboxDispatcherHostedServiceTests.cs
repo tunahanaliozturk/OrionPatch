@@ -11,6 +11,7 @@ using Moongazing.OrionPatch.Hosting;
 using Moongazing.OrionPatch.Models;
 using Xunit;
 
+[Collection("DispatcherQueueDepth")]
 public class OutboxDispatcherHostedServiceTests
 {
     [Fact]

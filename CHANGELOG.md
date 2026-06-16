@@ -24,6 +24,7 @@ A new `Histogram<double>` records dispatcher PICKUP lag: the gap between `Outbox
 
 - `PickupLagHistogramTests`: the helper emits for positive milliseconds and clamps negatives to 0.
 - `OutboxDispatcherHostedServiceTests`: the dispatcher records pickup lag on the first attempt and does NOT record it when a row is dispatched on a later (retry) attempt.
+- Serialized `QueueDepthGaugeTests` and `OutboxDispatcherHostedServiceTests` into one non-parallel collection. The gauge test reads the process-global queue-depth value while every hosted-service test writes it each poll cycle; running them in isolation removes a pre-existing cross-class race that the new dispatcher tests would otherwise widen.
 
 ## [0.2.29] - 2026-06-15
 
