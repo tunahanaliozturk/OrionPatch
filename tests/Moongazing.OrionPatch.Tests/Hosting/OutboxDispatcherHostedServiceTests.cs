@@ -1,6 +1,7 @@
 namespace Moongazing.OrionPatch.Tests.Hosting;
 
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -175,6 +176,109 @@ public class OutboxDispatcherHostedServiceTests
         // The storage exception is the one bound to the Exception slot.
         Assert.IsType<InvalidOperationException>(entry.Exception);
         Assert.Equal("storage flap", entry.Exception!.Message);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRecordPickupLag_OnFirstAttempt()
+    {
+        // Seed the row's enqueue time 2s in the past so its first-pickup lag is ~2000ms - a
+        // magnitude no other (fresh-row) test in the suite can produce, which keeps this
+        // assertion immune to the shared static Meter being written by parallel test classes.
+        var row = NewPendingRow(Guid.NewGuid(), "T", "{}");
+        var staleRow = new OutboxRow
+        {
+            Id = row.Id,
+            MessageType = row.MessageType,
+            Payload = row.Payload,
+            OccurredAtUtc = DateTime.UtcNow - TimeSpan.FromSeconds(2),
+            EnqueuedAtUtc = DateTime.UtcNow - TimeSpan.FromSeconds(2),
+            Status = OutboxStatus.Pending,
+        };
+        var storage = new InMemoryStorage();
+        await storage.AppendAsync(new[] { staleRow }, default);
+
+        var samples = StartPickupLagListener(out var listener);
+        using (listener)
+        {
+            var sink = new CapturingSink();
+            var options = new OrionPatchOptions { PollingInterval = TimeSpan.FromMilliseconds(10) };
+            var svc = new OutboxDispatcherHostedService(
+                storage, sink, Options.Create(options), new SystemClockProxy(),
+                NullLogger<OutboxDispatcherHostedService>.Instance);
+
+            using var cts = new CancellationTokenSource();
+            await svc.StartAsync(cts.Token);
+            await WaitFor(() => sink.Dispatched.Count == 1, TimeSpan.FromSeconds(5));
+            await cts.CancelAsync();
+            await svc.StopAsync(default);
+        }
+
+        lock (samples)
+        {
+            Assert.Contains(samples, s => s >= 1500.0);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldNotRecordPickupLag_OnRetryAttempt()
+    {
+        // A row whose AttemptCount is already 1 is dispatched as attempt #2, so pickup lag - which
+        // is the time to the FIRST attempt - must NOT be re-recorded. The stale 2s enqueue time
+        // means a (wrong) recording would surface as a ~2000ms sample; assert none appears.
+        var retryRow = new OutboxRow
+        {
+            Id = Guid.NewGuid(),
+            MessageType = "T",
+            Payload = "{}",
+            OccurredAtUtc = DateTime.UtcNow - TimeSpan.FromSeconds(2),
+            EnqueuedAtUtc = DateTime.UtcNow - TimeSpan.FromSeconds(2),
+            AttemptCount = 1,
+            Status = OutboxStatus.Pending,
+        };
+        var storage = new InMemoryStorage();
+        await storage.AppendAsync(new[] { retryRow }, default);
+
+        var samples = StartPickupLagListener(out var listener);
+        using (listener)
+        {
+            var sink = new CapturingSink();
+            var options = new OrionPatchOptions { PollingInterval = TimeSpan.FromMilliseconds(10) };
+            var svc = new OutboxDispatcherHostedService(
+                storage, sink, Options.Create(options), new SystemClockProxy(),
+                NullLogger<OutboxDispatcherHostedService>.Instance);
+
+            using var cts = new CancellationTokenSource();
+            await svc.StartAsync(cts.Token);
+            await WaitFor(() => sink.Dispatched.Count == 1, TimeSpan.FromSeconds(5));
+            await cts.CancelAsync();
+            await svc.StopAsync(default);
+        }
+
+        lock (samples)
+        {
+            Assert.DoesNotContain(samples, s => s >= 1500.0);
+        }
+    }
+
+    private static System.Collections.Generic.List<double> StartPickupLagListener(out MeterListener listener)
+    {
+        var samples = new System.Collections.Generic.List<double>();
+        var l = new MeterListener();
+        l.InstrumentPublished = (instrument, ml) =>
+        {
+            if (instrument.Meter.Name == Moongazing.OrionPatch.Telemetry.OrionPatchDiagnostics.SourceName
+                && instrument.Name == "orionpatch.outbox.dispatch.pickup_lag_ms")
+            {
+                ml.EnableMeasurementEvents(instrument);
+            }
+        };
+        l.SetMeasurementEventCallback<double>((_, val, _, _) =>
+        {
+            lock (samples) { samples.Add(val); }
+        });
+        l.Start();
+        listener = l;
+        return samples;
     }
 
     [Fact]
