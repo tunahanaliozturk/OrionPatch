@@ -30,6 +30,26 @@ public class EnqueueInterceptorTests
     }
 
     [Fact]
+    public async Task Enqueue_ShouldStampRealWriteTimeInEnqueuedAtUtc_WhenOccurredAtUtcIsBackdated()
+    {
+        using var db = await TestDb.CreateAsync();
+        var outbox = new EfCoreOutbox(db, new MessageTypeNameResolver(), new MessageSerializer(new JsonSerializerOptions()));
+        var backdated = DateTime.UtcNow - TimeSpan.FromHours(6);
+
+        outbox.Enqueue(new OrderConfirmed(Guid.NewGuid(), 1),
+            new OutboxEnqueueOptions { OccurredAtUtc = backdated });
+        await db.SaveChangesAsync();
+
+        var row = await db.Set<OutboxRow>().SingleAsync();
+
+        // OccurredAtUtc keeps the caller's backdate; EnqueuedAtUtc is the real write time, so the
+        // enqueue-based telemetry measures outbox dwell rather than the 6h backdate.
+        Assert.Equal(backdated, row.OccurredAtUtc);
+        Assert.True(row.EnqueuedAtUtc > row.OccurredAtUtc);
+        Assert.True(row.EnqueuedAtUtc >= DateTime.UtcNow - TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
     public async Task Rollback_ShouldNotPersistOutboxRow_WhenTransactionRollsBack()
     {
         using var db = await TestDb.CreateAsync();

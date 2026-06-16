@@ -139,6 +139,29 @@ public static class OrionPatchDiagnostics
         => DeadLetterAge.Record(System.Math.Max(0d, milliseconds));
 
     /// <summary>
+    /// v0.2.30 distribution of dispatcher PICKUP lag in milliseconds: the gap between
+    /// <c>OutboxRow.EnqueuedAtUtc</c> and the moment the dispatcher BEGINS a row's FIRST
+    /// dispatch attempt. Where the v0.2.21 <c>queue_lag</c> measures end-to-end latency to
+    /// successful dispatch (and therefore folds in every retry + backoff a row incurred), this
+    /// isolates how long a row waited to be PICKED UP at all - the dispatcher's polling + claim
+    /// responsiveness, before any sink work. Recorded once per row, on the first attempt only, so
+    /// retries do not re-record a pickup that already happened; a row that fails its first attempt
+    /// still records here because the pickup did occur. Comparing <c>pickup_lag_ms</c> p99 against
+    /// <c>queue_lag</c> p99 decomposes the latency budget: a large pickup_lag points at
+    /// PollingInterval / BatchSize / claim contention, while a small pickup_lag with a large
+    /// queue_lag points at retry-and-sink time dominating.
+    /// </summary>
+    public static readonly Histogram<double> PickupLag =
+        Meter.CreateHistogram<double>("orionpatch.outbox.dispatch.pickup_lag_ms", unit: "ms");
+
+    /// <summary>
+    /// Record a row's first-pickup lag. Negative inputs are clamped to 0 so clock skew across
+    /// enqueue / dispatcher hosts does not pull the histogram p50 down.
+    /// </summary>
+    public static void RecordPickupLag(double milliseconds)
+        => PickupLag.Record(System.Math.Max(0d, milliseconds));
+
+    /// <summary>
     /// v0.2.23 distribution of how many attempts each row took before reaching its
     /// terminal state (success or dead-letter). Operators graph p99 to spot rows that
     /// burn most of MaxAttempts before stabilising - a signal that BackoffStrategy

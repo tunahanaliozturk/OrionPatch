@@ -227,6 +227,15 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
     {
         var attempt = row.AttemptCount + 1;
         OrionPatchDiagnostics.Attempts.Add(1);
+        // v0.2.30: record first-pickup lag (enqueue -> first attempt start) exactly once per row,
+        // before any sink work, so it captures the dispatcher's polling + claim responsiveness
+        // independent of retry/backoff/sink time. Gated on the first attempt so a retry does not
+        // re-record a pickup that already happened; a failed first attempt still records it here
+        // because the pickup did occur.
+        if (attempt == 1)
+        {
+            OrionPatchDiagnostics.RecordPickupLag((clock.UtcNow - row.EnqueuedAtUtc).TotalMilliseconds);
+        }
         var sw = Stopwatch.StartNew();
         using var activity = OrionPatchDiagnostics.ActivitySource.StartActivity("OrionPatch.Dispatch");
         activity?.SetTag("orionpatch.message.type", row.MessageType);

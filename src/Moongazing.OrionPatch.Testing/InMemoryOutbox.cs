@@ -38,6 +38,9 @@ public sealed class InMemoryOutbox : IOutbox
         ArgumentNullException.ThrowIfNull(message);
 
         var occurred = options?.OccurredAtUtc ?? DateTime.UtcNow;
+        // v0.2.30: EnqueuedAtUtc is the real write time, kept distinct from a (possibly backdated)
+        // OccurredAtUtc, so enqueue-based telemetry measures outbox dwell rather than the backdate.
+        var enqueued = DateTime.UtcNow;
         var row = new OutboxRow
         {
             Id = Guid.NewGuid(),
@@ -48,7 +51,7 @@ public sealed class InMemoryOutbox : IOutbox
                 : JsonSerializer.Serialize(options.Headers, jsonOptions),
             CorrelationId = options?.CorrelationId,
             OccurredAtUtc = occurred,
-            EnqueuedAtUtc = occurred,
+            EnqueuedAtUtc = enqueued,
             Status = OutboxStatus.Pending,
             AttemptCount = 0,
             NextAttemptAtUtc = occurred,

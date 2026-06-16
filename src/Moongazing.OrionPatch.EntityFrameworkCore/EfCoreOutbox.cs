@@ -109,6 +109,12 @@ public sealed class EfCoreOutbox : IOutbox
         ArgumentNullException.ThrowIfNull(message);
 
         var occurredAt = options?.OccurredAtUtc ?? DateTime.UtcNow;
+        // v0.2.30: EnqueuedAtUtc is the real outbox WRITE time, captured here, and is kept distinct
+        // from OccurredAtUtc (which the caller may backdate via OutboxEnqueueOptions.OccurredAtUtc to
+        // reflect when the domain event happened). Stamping the actual write time keeps the
+        // enqueue-based telemetry (pickup_lag_ms, dead_letter.age_ms) measuring outbox dwell rather
+        // than the event backdate, and makes FIFO claim ordering reflect true enqueue order.
+        var enqueuedAt = DateTime.UtcNow;
 
         // Tenant stamping (v0.2.1): if the registered IOutboxTenantResolver yields a value AND
         // the caller has not already supplied "tenant-id" in Headers, attach it. Caller
@@ -135,7 +141,7 @@ public sealed class EfCoreOutbox : IOutbox
                 : JsonSerializer.Serialize(headers, serializer.Options),
             CorrelationId = options?.CorrelationId,
             OccurredAtUtc = occurredAt,
-            EnqueuedAtUtc = occurredAt,
+            EnqueuedAtUtc = enqueuedAt,
             Status = OutboxStatus.Pending,
             AttemptCount = 0,
             NextAttemptAtUtc = occurredAt,

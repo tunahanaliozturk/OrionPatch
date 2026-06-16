@@ -36,7 +36,13 @@ public sealed class OutboxRow
     /// </summary>
     public DateTime OccurredAtUtc { get; init; }
 
-    /// <summary>When the row was written to the outbox (UTC); defaults to <see cref="OccurredAtUtc"/>.</summary>
+    /// <summary>
+    /// When the row was written to the outbox (UTC). The bundled outboxes stamp the real write
+    /// time here, kept distinct from <see cref="OccurredAtUtc"/> (which a caller may backdate to
+    /// reflect when the domain event happened), so enqueue-based telemetry and FIFO claim ordering
+    /// reflect actual enqueue time. Falls back to <see cref="OccurredAtUtc"/> only when a producer
+    /// constructs a row without setting it.
+    /// </summary>
     public DateTime EnqueuedAtUtc { get; init; }
 
     /// <summary>Current lifecycle state.</summary>

@@ -6,6 +6,30 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.30] - 2026-06-16
+
+### Added
+
+#### `orionpatch.outbox.dispatch.pickup_lag_ms` histogram
+
+A new `Histogram<double>` records dispatcher PICKUP lag: the gap between `OutboxRow.EnqueuedAtUtc` and the moment the dispatcher begins a row's FIRST dispatch attempt.
+
+- Where the v0.2.21 `queue_lag` measures end-to-end latency to successful dispatch (and so folds in every retry and backoff a row incurred), this isolates how long a row waited to be picked up at all: the dispatcher's polling plus claim responsiveness, before any sink work.
+- Recorded once per row, on the first attempt only, so retries do not re-record a pickup that already happened. A row that fails its first attempt still records here because the pickup did occur.
+- Recorded before the sink call, so a slow or failing sink does not inflate it.
+- Negative inputs are clamped to 0 so clock skew across enqueue and dispatcher hosts does not pull the histogram p50 down.
+- Comparing `pickup_lag_ms` p99 against `queue_lag` p99 decomposes the latency budget: a large pickup lag points at `PollingInterval` / `BatchSize` / claim contention, while a small pickup lag with a large queue lag points at retry-and-sink time dominating.
+
+### Fixed
+
+- The bundled outboxes (`EfCoreOutbox`, `InMemoryOutbox`) now stamp the real write time into `OutboxRow.EnqueuedAtUtc` instead of copying the (possibly backdated) `OccurredAtUtc` into it (codex). A caller that backdates `OutboxEnqueueOptions.OccurredAtUtc` to reflect when a domain event happened no longer inflates the enqueue-based telemetry: the new `pickup_lag_ms` and the v0.2.29 `dead_letter.age_ms` now measure outbox dwell rather than the event backdate, and FIFO claim ordering (which sorts by `EnqueuedAtUtc`) reflects actual enqueue order rather than the backdate.
+
+### Tests
+
+- `PickupLagHistogramTests`: the helper emits for positive milliseconds and clamps negatives to 0.
+- `OutboxDispatcherHostedServiceTests`: the dispatcher records pickup lag on the first attempt and does NOT record it when a row is dispatched on a later (retry) attempt.
+- Serialized `QueueDepthGaugeTests` and `OutboxDispatcherHostedServiceTests` into one non-parallel collection. The gauge test reads the process-global queue-depth value while every hosted-service test writes it each poll cycle; running them in isolation removes a pre-existing cross-class race that the new dispatcher tests would otherwise widen.
+
 ## [0.2.29] - 2026-06-15
 
 ### Added

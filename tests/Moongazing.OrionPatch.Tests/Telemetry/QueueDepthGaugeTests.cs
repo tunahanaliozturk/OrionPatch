@@ -4,6 +4,7 @@ using System.Diagnostics.Metrics;
 using Moongazing.OrionPatch.Telemetry;
 using Xunit;
 
+[Collection("DispatcherQueueDepth")]
 public sealed class QueueDepthGaugeTests
 {
     [Fact]
