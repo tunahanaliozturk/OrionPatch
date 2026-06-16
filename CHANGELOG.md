@@ -20,6 +20,10 @@ A new `Histogram<double>` records dispatcher PICKUP lag: the gap between `Outbox
 - Negative inputs are clamped to 0 so clock skew across enqueue and dispatcher hosts does not pull the histogram p50 down.
 - Comparing `pickup_lag_ms` p99 against `queue_lag` p99 decomposes the latency budget: a large pickup lag points at `PollingInterval` / `BatchSize` / claim contention, while a small pickup lag with a large queue lag points at retry-and-sink time dominating.
 
+### Fixed
+
+- The bundled outboxes (`EfCoreOutbox`, `InMemoryOutbox`) now stamp the real write time into `OutboxRow.EnqueuedAtUtc` instead of copying the (possibly backdated) `OccurredAtUtc` into it (codex). A caller that backdates `OutboxEnqueueOptions.OccurredAtUtc` to reflect when a domain event happened no longer inflates the enqueue-based telemetry: the new `pickup_lag_ms` and the v0.2.29 `dead_letter.age_ms` now measure outbox dwell rather than the event backdate, and FIFO claim ordering (which sorts by `EnqueuedAtUtc`) reflects actual enqueue order rather than the backdate.
+
 ### Tests
 
 - `PickupLagHistogramTests`: the helper emits for positive milliseconds and clamps negatives to 0.
