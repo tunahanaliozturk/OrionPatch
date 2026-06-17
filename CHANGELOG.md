@@ -6,6 +6,11 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.2.32] - 2026-06-17
+
+### Changed
+- Set the NuGet package icon to the navy Moongazing mark and the README logo to the white Moongazing mark.
+
 ## [0.2.31] - 2026-06-17
 
 ### Changed
