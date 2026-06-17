@@ -1,35 +1,60 @@
 # OrionPatch Benchmarks
 
-> **Status: pending v0.2.0.** A dedicated `bench/Moongazing.OrionPatch.Bench` project will land in the next minor release. This document outlines the scenarios we intend to measure and the comparison baselines we will report against.
+A [BenchmarkDotNet](https://benchmarkdotnet.org/) suite for the OrionPatch core library lives in
+`benchmarks/Moongazing.OrionPatch.Benchmarks`. It measures the pure, in-memory hot paths of the
+core package only. None of these benchmarks touch a database, a message broker (RabbitMQ, Kafka,
+Azure Service Bus), or any other external dependency, so they run anywhere `dotnet` does and the
+numbers reflect library overhead rather than I/O.
 
-## Scenarios on the roadmap
+This document describes what is measured and how to run it. It intentionally contains no result
+tables: numbers are machine-specific, so the suite prints them locally rather than committing
+figures that would be stale or misleading on someone else's hardware.
 
-- **Interceptor overhead (no outbox rows).** SaveChanges with the OrionPatch SaveChangesInterceptor registered but zero enqueued messages, vs. baseline SaveChanges without the interceptor. Expected metric: per-call overhead in microseconds and allocated bytes. Goal: stay under 5 percent overhead and zero extra allocations on the hot path.
-- **Interceptor with N enqueued events.** Same call, 1 / 10 / 100 enqueued events. Expected metric: throughput in transactions per second on SQLite (in-memory) and Postgres (Testcontainers). Goal: linear scaling, dominated by the underlying INSERT cost.
-- **Dispatcher claim batch.** Dispatcher polling against a pre-seeded outbox table of 10,000 ready rows, batch size 50 / 500. Expected metric: rows claimed per second and contention behavior with N concurrent dispatchers (1 / 4 / 16). Goal: confirm the portable compare-and-swap claim performs acceptably until the v0.2 `SKIP LOCKED` work lands.
-- **End-to-end enqueue to sink latency.** From `IOutbox.Enqueue` to `IOutboxSink.SendAsync` returning, with the in-process `ChannelOutboxSink`. Expected metric: p50 / p99 latency in milliseconds. Goal: provide a baseline number readers can compare against once broker sinks ship in v0.2.
-- **Allocations on the dispatcher hot loop.** GC stats over 1,000,000 dispatched messages. Goal: no Gen2 collections; bounded Gen0 churn.
+## What is measured
 
-## Why not yet?
+Each class is a `[MemoryDiagnoser]` benchmark and runs on .NET 8 and .NET 9 via
+`[SimpleJob(RuntimeMoniker.Net80)]` and `[SimpleJob(RuntimeMoniker.Net90)]`.
 
-The dispatcher has been benchmarked informally during development (release-mode test runs with stopwatch instrumentation against SQLite and Postgres) and the numbers were healthy enough to ship v0.1.0. A formal BenchmarkDotNet harness was deprioritized so v0.1.0 could ship with a working `ChannelOutboxSink` and EF Core backend before broker sinks land in v0.2. The harness is the first piece of v0.2 work.
+- **BackoffStrategyBenchmarks.** Evaluates `BackoffStrategy.Exponential` and `BackoffStrategy.Fixed`
+  across attempt numbers spanning the early ramp, the saturation cap, and the overflow guard
+  (`Attempt` = 1, 5, 30, 100). This delegate runs on every failed dispatch to compute the next
+  attempt time, so its arithmetic and the overflow-saturation branch sit on the retry hot path. The
+  suite also times constructing the factory delegate versus reusing a cached one.
+- **OutboxEnvelopeBenchmarks.** Constructs the public `OutboxEnvelope` record with and without a
+  header dictionary. The dispatcher materializes one envelope per row immediately before invoking
+  the sink, so this is the per-message allocation on the dispatch hot loop.
+- **ChannelOutboxSinkBenchmarks.** Writes N envelopes through `ChannelOutboxSink.SendAsync` and
+  drains them via `ChannelOutboxSink.Reader` (`MessageCount` = 1, 100, 1000). This is the only sink
+  shipped in the core library and stands in for in-process fan-out throughput. Channel capacity is
+  sized above the batch so writes never back-pressure, isolating enqueue and drain cost from the
+  full-channel path.
+- **MessageTypeRegistryBenchmarks.** Times building the immutable `MessageTypeRegistry` (which
+  snapshots into a `FrozenDictionary`, a one-time startup cost) and resolving names on the
+  enqueue/dispatch hot path via `ResolveLogicalName` and `ResolveClrType` (one lookup per message).
+- **OutboxRowLifecycleBenchmarks.** Constructs an `OutboxRow` and applies the in-memory
+  claim/complete and claim/fail-with-backoff state transitions the dispatcher performs on each row,
+  independent of any storage backend.
 
-If you have a specific scenario you want measured before v0.2, open an issue with the `benchmark` label and we will prioritize it.
-
-## How it will be run
+## Running
 
 ```bash
-cd <repo-root>
-dotnet run -c Release --project bench/Moongazing.OrionPatch.Bench
+dotnet run -c Release --project benchmarks/Moongazing.OrionPatch.Benchmarks
 ```
 
-Results will land in `BenchmarkDotNet.Artifacts/results/` and a summary will be committed back to this file with each release.
+Pass a filter to run a subset, for example:
 
-## Comparison baselines
+```bash
+dotnet run -c Release --project benchmarks/Moongazing.OrionPatch.Benchmarks -- --filter '*Backoff*'
+```
 
-We will report OrionPatch numbers next to two honest baselines so readers can place them in context:
+Results are written to `BenchmarkDotNet.Artifacts/results/` next to the project. Run on a quiet
+machine on AC power for stable measurements; laptop thermal throttling and background load skew the
+numbers.
 
-- **DIY interceptor.** A minimal hand-rolled SaveChangesInterceptor that writes to an outbox table and a background poller. Establishes how much overhead the OrionPatch abstractions add over the bare metal.
-- **MassTransit InMemory mediator + outbox.** Same workload using MassTransit's in-memory transport with the EF Core outbox. Establishes how OrionPatch compares against the closest commodity alternative when you do not need a framework.
+## Scope and exclusions
 
-The point of the comparison is to be honest about where OrionPatch sits, not to win a chart. If MassTransit is faster on a given scenario we will say so and explain why.
+The suite deliberately covers only the core library's deterministic, in-memory paths. Backend and
+broker behaviour (EF Core SaveChanges interception, claim contention under `SKIP LOCKED`, end-to-end
+enqueue-to-broker latency) depends on external infrastructure and belongs in integration-style
+performance tests against real dependencies, not in this microbenchmark project. If you want a
+specific in-memory scenario added, open an issue with the `benchmark` label.
