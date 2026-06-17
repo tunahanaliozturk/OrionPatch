@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks></TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- CA1822: BenchmarkDotNet requires [Benchmark] methods to be instance members, so the
+         "could be static" suggestion is a false positive for this project. -->
+    <NoWarn>$(NoWarn);CS1591;CA1822</NoWarn>
+    <!--
+      The repo enables Central Package Management (Directory.Packages.props), which forbids an
+      inline Version on a PackageReference (NU1008). Opt this benchmark project out of CPM so the
+      BenchmarkDotNet version stays self-contained here and the shared props file is untouched.
+    -->
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.14.0" />
+    <ProjectReference Include="..\..\src\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
+  </ItemGroup>
+</Project>
