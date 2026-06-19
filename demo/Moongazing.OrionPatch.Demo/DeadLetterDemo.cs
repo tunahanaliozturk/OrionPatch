@@ -7,8 +7,13 @@ namespace Moongazing.OrionPatch.Demo;
 
 /// <summary>
 /// Terminal failure: a permanently failing sink exhausts MaxAttempts. The dispatcher retries up to
-/// the budget, then flips the row to DeadLettered so it stops being re-claimed until an operator
-/// intervenes. This is the safety valve that keeps a poison message from looping forever.
+/// the budget, then routes the row out of the active outbox so it stops being re-claimed until an
+/// operator intervenes. This is the safety valve that keeps a poison message from looping forever.
+///
+/// As of v0.3.0 <see cref="InMemoryOutboxStorage"/> implements <see cref="IDeadLetterStore"/>, so the
+/// exhausted row is moved INTO the dead-letter store (and removed from the active outbox) rather than
+/// flipped to DeadLettered in place. See <see cref="DeadLetterStoreAndArchivalDemo"/> for the store
+/// and archival APIs in full.
 /// </summary>
 public static class DeadLetterDemo
 {
@@ -36,13 +41,20 @@ public static class DeadLetterDemo
         {
             pass++;
             await dispatcher.DispatchOnceAsync();
-            var row = storage.Rows.Single();
-            Console.WriteLine($"  pass {pass}: status={row.Status} attemptCount={row.AttemptCount}");
+            var active = storage.Rows.SingleOrDefault();
+            Console.WriteLine(active is null
+                ? $"  pass {pass}: row routed out of the active outbox"
+                : $"  pass {pass}: status={active.Status} attemptCount={active.AttemptCount}");
         }
 
-        var final = storage.Rows.Single();
-        Console.WriteLine(
-            $"  final status={final.Status} attemptCount={final.AttemptCount} lastError={final.LastError}");
+        // The exhausted row was routed into the dead-letter store and is no longer in the active outbox.
+        var dead = await storage.GetDeadLetteredAsync();
+        Console.WriteLine($"  active rows remaining: {storage.Rows.Count} (the poison row was routed out)");
+        foreach (var message in dead)
+        {
+            Console.WriteLine(
+                $"  dead-lettered: id={message.Id} attempts={message.AttemptCount} finalError={message.FinalError}");
+        }
         Console.WriteLine($"  queue depth (Pending only): {await storage.QueueDepthAsync()} (dead-lettered rows are excluded)");
     }
 }

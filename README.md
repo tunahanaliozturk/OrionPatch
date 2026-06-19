@@ -21,6 +21,8 @@
 
 OrionPatch is a transactional outbox primitive for .NET. You enqueue a message inside an EF Core `SaveChanges` call; it commits in the same transaction as your domain data; a background dispatcher hands it to a pluggable `IOutboxSink` at-least-once.
 
+The current release is 0.3.0. The "What ships" and "does NOT do" sections below describe the original v0.1.0 surface as historical record; capabilities added since then (inbox, concrete broker sinks, and the v0.3.0 dead-letter store and archival APIs) are documented in their own sections and in the [CHANGELOG](CHANGELOG.md).
+
 The package is deliberately small. It does NOT ship a broker — RabbitMQ, Azure Service Bus, Kafka, NATS sinks live in separate opt-in sub-packages on the v0.2+ roadmap. v0.1.0 ships one concrete sink: `ChannelOutboxSink` (in-process `System.Threading.Channels`, zero external dependency, useful for monoliths and tests).
 
 It is also deliberately scoped. No inbox in v0.1.0 - inbox idempotency, dedup tables, broker-side consumer wrappers are v0.2 work. v0.1.0 owns one thing well: getting a message from "I just did a domain mutation" to "the sink received it, exactly once per row, even if my process crashes between commit and send."
@@ -71,6 +73,8 @@ The diagram shows the at-least-once contract clearly: the outbox row and the dom
 | Multi-provider claim (SQL Server/Postgres/MySQL/SQLite) | Yes (v0.2 for native SKIP LOCKED) | Maybe | Optional | Yes |
 | Pluggable sink (no broker bundled) | Yes      | -               | Bundled     | Bundled   |
 | Built-in retry + dead-letter     | Yes        | Maybe           | Yes         | Yes       |
+| Dead-letter store (route exhausted rows out of the hot outbox) | Yes (v0.3) | Maybe | Yes | Yes |
+| Outbox archival / retention (reap processed rows) | Yes (v0.3) | Maybe | Optional | Optional |
 | OpenTelemetry                    | Yes        | Maybe           | Yes         | Yes       |
 | In-process test sink             | Yes        | -               | Yes         | Yes       |
 | Saga / process manager           | No (out of scope) | -        | Yes         | Yes       |
@@ -167,6 +171,51 @@ OrionPatch guarantees at-least-once delivery. Duplicates occur in two known scen
 
 Consumer sinks MUST be idempotent. Typical patterns: deduplicate at the destination on `OutboxEnvelope.Id`, or use upserts. Keep the external publish the last statement of the sink implementation so a failure after publish does not silently lose acknowledgement.
 
+## Dead-letter store and archival (v0.3.0)
+
+v0.3.0 adds two outbox maintenance capabilities. Both are SPIs on the storage backend, not separate services: a storage type opts in by implementing the interface, and the dispatcher uses it when present.
+
+### Dead-letter store (`IDeadLetterStore`)
+
+When a row exhausts `OrionPatchOptions.MaxAttempts`, the dispatcher prefers to route it OUT of the hot outbox into a dedicated dead-letter store instead of flipping it to `DeadLettered` in place. Routing removes the source row from the active outbox (so it can never be reclaimed or retried) and appends a `DeadLetteredMessage` snapshot carrying the final failure context: payload, headers, correlation id, enqueue time, total attempt count, final error, and the dead-letter instant.
+
+Routing is idempotent on the row id. A redelivered or crash-replayed terminal-path call for an already-routed row is a no-op, so a message lands in the store exactly once and produces no duplicate metrics or alerts. Storage that does not implement `IDeadLetterStore` keeps the prior in-place status flip, so this is backward compatible.
+
+This is distinct from the v0.2.18 `IDeadLetterSink` observer. The sink is a fire-and-forget triage notification (Slack, PagerDuty); the store is the durable destination the message is moved into.
+
+```csharp
+// InMemoryOutboxStorage (and any storage that implements IDeadLetterStore) is detected by the
+// dispatcher automatically. To inspect or replay abandoned messages, query the store directly:
+if (storage is IDeadLetterStore deadLetterStore)
+{
+    IReadOnlyList<DeadLetteredMessage> abandoned =
+        await deadLetterStore.GetDeadLetteredAsync(ct);
+
+    foreach (var message in abandoned)
+    {
+        // message.Id, message.MessageType, message.Payload, message.FinalError,
+        // message.AttemptCount, message.DeadLetteredAtUtc ...
+    }
+}
+```
+
+### Archival (`IOutboxArchivalStore`)
+
+Successfully dispatched (`Processed`) rows accumulate in the hot outbox; an ever-growing table degrades claim-query planning and storage cost. `ArchiveProcessedAsync` reaps `Processed` rows whose `ProcessedAtUtc` is at or before `nowUtc - retention` out of the active outbox and returns the count moved. Pending, Claimed, and DeadLettered rows are never touched, and a processed row still inside the retention window is never touched. The reap is idempotent and incremental, so it is safe to call on a schedule.
+
+`OrionPatchOptions.ArchiveRetention` (default 7 days, validated non-negative) expresses the retention horizon. `ArchiveProcessedAsync` is operator-invoked maintenance: OrionPatch does not start a background reaper, so call it from your own scheduled job (a hosted `BackgroundService`, Quartz.NET, Hangfire, or a cron-triggered endpoint).
+
+```csharp
+// Run from a scheduled maintenance job, e.g. nightly.
+if (storage is IOutboxArchivalStore archivalStore)
+{
+    int reaped = await archivalStore.ArchiveProcessedAsync(
+        options.Value.ArchiveRetention, DateTime.UtcNow, ct);
+}
+```
+
+The bundled `InMemoryOutboxStorage` supports an archive mode (default; reaped rows are observable via `GetArchivedAsync`) and a purge mode (`new InMemoryOutboxStorage(purgeOnArchive: true)`; reaped rows are discarded).
+
 ## Telemetry
 
 - `ActivitySource` and `Meter` named `Moongazing.OrionPatch`.
@@ -182,12 +231,13 @@ See [benchmarks.md](benchmarks.md) for the scenarios we plan to measure and the 
 
 ## Roadmap
 
+The current release is 0.3.0, which shipped the outbox dead-letter store (`IDeadLetterStore`) and outbox archival (`IOutboxArchivalStore`) described above. See the [CHANGELOG](CHANGELOG.md) for the full per-version history.
+
 12-month forward plan in [ROADMAP.md](ROADMAP.md). The next milestones:
 
-- v0.2.0 (Q4 2026) — Inbox + dedup; concrete sinks for RabbitMQ + Azure Service Bus; native `SKIP LOCKED` SQL for SqlServer/Postgres/MySQL.
-- v0.3.0 (Q1 2027) — Push-based dispatch (LISTEN/NOTIFY, Service Broker).
-- v0.4.0 (Q1-Q2 2027) — Operator dashboard, schema-evolution helpers.
-- v1.0.0 (Q2 2027) — API freeze, LTS window.
+- Push-based dispatch (LISTEN/NOTIFY, Service Broker).
+- Operator dashboard, schema-evolution helpers.
+- v1.0.0: API freeze, LTS window.
 
 If something on the list matters to you, open an issue with the `roadmap` label.
 
