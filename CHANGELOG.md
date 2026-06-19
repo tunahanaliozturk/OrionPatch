@@ -6,6 +6,39 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-19
+
+### Added
+
+#### Outbox dead-letter store (`IDeadLetterStore`)
+
+A new core abstraction routes messages that exhaust their delivery budget OUT of the hot outbox into a dedicated dead-letter store, carrying their final failure context, instead of retrying forever or silently dropping them.
+
+- `IDeadLetterStore.DeadLetterAsync(rowId, DeadLetterContext, ct)` removes the source row from the active outbox and appends a `DeadLetteredMessage` snapshot (payload, headers, correlation id, enqueue time, total attempt count, final error, dead-letter instant).
+- Routing is idempotent on the row id: a redelivered or crash-replayed terminal-path call for an already-routed row is a no-op, so a message lands in the dead-letter store EXACTLY ONCE and is never reclaimed or retried again (the source row is gone from the claim set).
+- This complements, and is distinct from, the v0.2.18 `IDeadLetterSink` observer: the sink is a fire-and-forget triage notification (Slack, PagerDuty), the store is the durable destination the message is moved into.
+- Both `OutboxDispatcherHostedService` and the test `DeterministicDispatcher` now PREFER routing into an `IDeadLetterStore` when the storage implements it, and fall back to the in-place `OutboxStatus.DeadLettered` status flip otherwise (fully backward compatible for storage that does not implement the new interface).
+- New types: `IDeadLetterStore`, `DeadLetteredMessage`, `DeadLetterContext`.
+
+#### Outbox archival (`IOutboxArchivalStore`)
+
+A new core abstraction reaps successfully dispatched (`Processed`) rows out of the hot outbox once they cross a retention window, so the active outbox stays small and claim-query planning stays healthy.
+
+- `IOutboxArchivalStore.ArchiveProcessedAsync(retention, nowUtc, ct)` moves every `Processed` row whose `ProcessedAtUtc <= nowUtc - retention` out of the active outbox and returns the number reaped. Pending, Claimed, and DeadLettered rows are never touched; processed rows still inside the retention window are never touched. The cutoff is inclusive and the reap is idempotent and incremental.
+- The in-memory storage supports both an ARCHIVE mode (default, moved rows observable via `GetArchivedAsync`) and a PURGE mode (`new InMemoryOutboxStorage(purgeOnArchive: true)`, moved rows discarded).
+- New `OrionPatchOptions.ArchiveRetention` (default 7 days, validated non-negative) expresses the retention horizon for operators.
+- New types: `IOutboxArchivalStore`.
+
+#### In-memory store implements both capabilities
+
+`InMemoryOutboxStorage` now implements `IDeadLetterStore` and `IOutboxArchivalStore` in addition to `IOutboxStorage`, with all transitions serialized through the existing per-instance lock. New inspection accessors: `DeadLetteredMessages`, `ArchivedRows`.
+
+### Tests
+
+- `InMemoryDeadLetterStoreTests`: routes a row out of the active outbox with full failure context; idempotent on repeat calls (exactly once, first context wins); returns false for missing rows; rejects empty error text; a dead-lettered row is no longer claimable.
+- `InMemoryArchivalStoreTests`: archives only processed rows past retention; never touches Pending/Claimed/DeadLettered; inclusive cutoff boundary; idempotent across passes; purge mode discards without archiving; throws on negative retention.
+- `DeterministicDispatcherTests`: a row exceeding `MaxAttempts` is routed to the dead-letter store exactly once, preserves its failure context, and is not retried on subsequent passes.
+
 ## [0.2.32] - 2026-06-17
 
 ### Changed

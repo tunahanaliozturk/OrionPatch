@@ -332,7 +332,21 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
             {
                 if (attempt >= opts.MaxAttempts)
                 {
-                    await storage.DeadLetterAsync(row.Id, truncated, cancellationToken).ConfigureAwait(false);
+                    // v0.3.0: prefer routing into a dedicated dead-letter store when the storage
+                    // exposes one. Routing removes the row from the active outbox (so it can never
+                    // be reclaimed or retried) and records the final failure context exactly once.
+                    // Storage that does not implement IDeadLetterStore keeps the in-place status flip.
+                    if (storage is IDeadLetterStore deadLetterStore)
+                    {
+                        await deadLetterStore.DeadLetterAsync(
+                            row.Id,
+                            new DeadLetterContext(truncated, attempt, clock.UtcNow),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await storage.DeadLetterAsync(row.Id, truncated, cancellationToken).ConfigureAwait(false);
+                    }
                     OrionPatchDiagnostics.DeadLettered.Add(1);
                     // v0.2.29: record the outbox dwell time (enqueue -> dead-letter) AFTER the
                     // terminal state is persisted, the failure-path analog to the v0.2.21

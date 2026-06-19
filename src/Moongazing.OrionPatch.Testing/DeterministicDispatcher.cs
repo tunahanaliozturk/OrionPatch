@@ -101,7 +101,21 @@ public sealed class DeterministicDispatcher
                 var message = ex.Message;
                 if (attempt >= options.MaxAttempts)
                 {
-                    await storage.DeadLetterAsync(row.Id, message, cancellationToken).ConfigureAwait(false);
+                    // v0.3.0: when the storage exposes a dedicated dead-letter store, route the
+                    // exhausted row INTO it (which removes the source row from the active outbox,
+                    // so it can never be reclaimed or retried). Otherwise fall back to the in-place
+                    // status flip. Either way the row leaves the retry path exactly once.
+                    if (storage is IDeadLetterStore deadLetterStore)
+                    {
+                        await deadLetterStore.DeadLetterAsync(
+                            row.Id,
+                            new DeadLetterContext(message, attempt, clock.UtcNow),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await storage.DeadLetterAsync(row.Id, message, cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 else
                 {
