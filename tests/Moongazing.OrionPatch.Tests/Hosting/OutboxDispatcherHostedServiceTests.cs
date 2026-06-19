@@ -261,6 +261,80 @@ public class OutboxDispatcherHostedServiceTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ShouldSkipDeadLetterSideEffects_WhenStoreReportsNoOp()
+    {
+        // codex P2: when IDeadLetterStore.DeadLetterAsync returns false for an idempotent replay
+        // (two dispatchers handling the same exhausted row after lease expiry), the post-dead-letter
+        // side effects - deadlettered telemetry increment + IDeadLetterSink notification - must NOT
+        // run. Otherwise the dead_letter metric double-counts and triage alerts fire twice for a row
+        // that was already routed. Seed a row whose FIRST dispatch is terminal (AttemptCount == MaxAttempts - 1)
+        // and back it with a store that always reports a no-op (false).
+        var rowId = Guid.NewGuid();
+        var storage = new NoOpDeadLetterStorage();
+        var seedRow = NewPendingRow(rowId, "T", "{}");
+        seedRow.AttemptCount = 2;
+        await storage.AppendAsync(new[] { seedRow }, default);
+
+        var sink = new ThrowingSink();
+        var deadLetterSink = new CountingDeadLetterSink();
+        var options = new OrionPatchOptions
+        {
+            PollingInterval = TimeSpan.FromMilliseconds(10),
+            MaxAttempts = 3,
+            BackoffStrategy = _ => TimeSpan.FromMilliseconds(5),
+        };
+
+        var deadLetterSamples = StartDeadLetteredCounterListener(out var listener);
+        using (listener)
+        {
+            var svc = new OutboxDispatcherHostedService(
+                storage, sink, Options.Create(options), new SystemClockProxy(),
+                NullLogger<OutboxDispatcherHostedService>.Instance, deadLetterSink);
+
+            using var cts = new CancellationTokenSource();
+            await svc.StartAsync(cts.Token);
+
+            // The terminal path runs once the (single) attempt exhausts MaxAttempts and calls the store,
+            // which reports a no-op. Wait until the store has actually been asked to dead-letter.
+            await WaitFor(() => storage.DeadLetterCalls >= 1, TimeSpan.FromSeconds(5));
+            // Give the loop a beat to (incorrectly) fire side effects if the gate were missing.
+            await Task.Delay(100);
+
+            await cts.CancelAsync();
+            await svc.StopAsync(default);
+        }
+
+        // Store was asked to route, reported no-op -> NO deadlettered metric increment, NO sink call.
+        Assert.True(storage.DeadLetterCalls >= 1);
+        lock (deadLetterSamples)
+        {
+            Assert.Empty(deadLetterSamples);
+        }
+        Assert.Equal(0, deadLetterSink.Notifications);
+    }
+
+    private static System.Collections.Generic.List<long> StartDeadLetteredCounterListener(out MeterListener listener)
+    {
+        var samples = new System.Collections.Generic.List<long>();
+        var l = new MeterListener();
+        l.InstrumentPublished = (instrument, ml) =>
+        {
+            if (instrument.Meter.Name == Moongazing.OrionPatch.Telemetry.OrionPatchDiagnostics.SourceName
+                && instrument.Name == "orionpatch.outbox.deadlettered")
+            {
+                ml.EnableMeasurementEvents(instrument);
+            }
+        };
+        l.SetMeasurementEventCallback<long>((_, val, _, _) =>
+        {
+            lock (samples) { samples.Add(val); }
+        });
+        l.Start();
+        listener = l;
+        return samples;
+    }
+
     private static System.Collections.Generic.List<double> StartPickupLagListener(out MeterListener listener)
     {
         var samples = new System.Collections.Generic.List<double>();
@@ -394,6 +468,56 @@ public class OutboxDispatcherHostedServiceTests
 
         public Task<long> QueueDepthAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult((long)Rows.Values.Count(r => r.Status == OutboxStatus.Pending));
+    }
+
+    // Storage that implements IDeadLetterStore and ALWAYS reports a no-op (false) from
+    // DeadLetterAsync, simulating an idempotent replay of an already-routed exhausted row.
+    private sealed class NoOpDeadLetterStorage : IOutboxStorage, IDeadLetterStore
+    {
+        private readonly InMemoryStorage inner = new();
+        public int DeadLetterCalls;
+
+        public Task AppendAsync(IReadOnlyList<OutboxRow> rows, CancellationToken cancellationToken = default) =>
+            inner.AppendAsync(rows, cancellationToken);
+
+        public Task<IReadOnlyList<OutboxRow>> ClaimNextAsync(int batchSize, string dispatcherIdentity, TimeSpan leaseDuration, CancellationToken cancellationToken = default) =>
+            inner.ClaimNextAsync(batchSize, dispatcherIdentity, leaseDuration, cancellationToken);
+
+        public Task CompleteAsync(Guid rowId, DateTime processedAtUtc, CancellationToken cancellationToken = default) =>
+            inner.CompleteAsync(rowId, processedAtUtc, cancellationToken);
+
+        public Task FailAsync(Guid rowId, string errorMessage, DateTime nextAttemptAtUtc, CancellationToken cancellationToken = default) =>
+            inner.FailAsync(rowId, errorMessage, nextAttemptAtUtc, cancellationToken);
+
+        // Legacy in-place flip - not exercised by this fake's tests but required by the interface.
+        public Task DeadLetterAsync(Guid rowId, string errorMessage, CancellationToken cancellationToken = default) =>
+            inner.DeadLetterAsync(rowId, errorMessage, cancellationToken);
+
+        public Task<long> QueueDepthAsync(CancellationToken cancellationToken = default) =>
+            inner.QueueDepthAsync(cancellationToken);
+
+        // Always a no-op: the row is treated as already dead-lettered by a peer dispatcher. Remove it
+        // from the active outbox so the dispatcher loop does not re-claim and re-attempt it forever.
+        public Task<bool> DeadLetterAsync(Guid rowId, DeadLetterContext context, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref DeadLetterCalls);
+            inner.Rows.TryRemove(rowId, out _);
+            return Task.FromResult(false);
+        }
+
+        public Task<IReadOnlyList<DeadLetteredMessage>> GetDeadLetteredAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<DeadLetteredMessage>>(Array.Empty<DeadLetteredMessage>());
+    }
+
+    private sealed class CountingDeadLetterSink : IDeadLetterSink
+    {
+        private int notifications;
+        public int Notifications => Volatile.Read(ref notifications);
+        public Task OnDeadLetteredAsync(Guid rowId, OutboxEnvelope? envelope, string errorMessage, int attemptCount, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref notifications);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class CapturingSink : IOutboxSink

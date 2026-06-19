@@ -24,6 +24,29 @@ public sealed class OrionPatchOptions
     /// <summary>When false, the background dispatcher is not started (writer-only replicas).</summary>
     public bool DispatcherEnabled { get; set; } = true;
 
+    /// <summary>
+    /// v0.3.0 retention window for successfully dispatched (<c>Processed</c>) rows. A row remains
+    /// in the hot outbox for this long after dispatch, then becomes eligible to be archived or
+    /// purged by <see cref="Abstractions.IOutboxArchivalStore.ArchiveProcessedAsync"/>. Default
+    /// 7 days. <see cref="TimeSpan.Zero"/> reaps processed rows on the next maintenance pass.
+    /// Pending, Claimed, and DeadLettered rows are never affected by this window.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when set to a negative value.</exception>
+    public TimeSpan ArchiveRetention
+    {
+        get => _archiveRetention;
+        set
+        {
+            if (value < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "ArchiveRetention must be non-negative.");
+            }
+            _archiveRetention = value;
+        }
+    }
+
+    private TimeSpan _archiveRetention = TimeSpan.FromDays(7);
+
     private Func<int, TimeSpan> _backoffStrategy =
         Configuration.BackoffStrategy.Exponential(TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(30));
 
