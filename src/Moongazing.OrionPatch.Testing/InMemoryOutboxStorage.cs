@@ -27,6 +27,23 @@ public sealed class InMemoryOutboxStorage : IOutboxStorage, IDeadLetterStore, IO
     private readonly bool purgeOnArchive;
 
     /// <summary>
+    /// Create the in-memory storage in archive mode (reaped rows are retained in the in-memory archive).
+    /// </summary>
+    /// <remarks>
+    /// This explicit zero-argument overload exists for BINARY compatibility. v0.2.x assemblies were
+    /// compiled against a compiler-generated <c>.ctor()</c>; the v0.3.0 <c>bool</c>-parameter
+    /// constructor below has an optional default but is a DIFFERENT metadata signature
+    /// (<c>.ctor(System.Boolean)</c>). An optional default only preserves SOURCE compatibility, so
+    /// callers compiled against v0.2.x that invoke <c>new InMemoryOutboxStorage()</c> would bind to a
+    /// missing <c>.ctor()</c> and throw <see cref="MissingMethodException"/> at runtime under 0.3.0.
+    /// This overload preserves that metadata signature and delegates to the new constructor.
+    /// </remarks>
+    public InMemoryOutboxStorage()
+        : this(purgeOnArchive: false)
+    {
+    }
+
+    /// <summary>
     /// Create the in-memory storage.
     /// </summary>
     /// <param name="purgeOnArchive">

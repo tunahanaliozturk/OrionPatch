@@ -127,6 +127,44 @@ public class InMemoryOutboxStorageTests
     }
 
     [Fact]
+    public void ParameterlessConstructor_ShouldExistInMetadata_AsZeroParameterCtor()
+    {
+        // codex P1 / binary-compat: v0.2.x assemblies were compiled against a compiler-generated
+        // public .ctor() with ZERO parameters. The v0.3.0 bool-parameter constructor (even with an
+        // optional default) is a DIFFERENT metadata signature, so an optional default only preserves
+        // SOURCE compat - a binary compiled against v0.2.x would throw MissingMethodException.
+        // Assert the zero-parameter .ctor() is physically present in metadata so the minor release
+        // stays BINARY-compatible. GetConstructor(Type.EmptyTypes) resolves by metadata signature
+        // (it does NOT synthesize the bool ctor's optional default), and ctor.Invoke proves it
+        // actually constructs - exactly the bind a v0.2.x-compiled `new InMemoryOutboxStorage()` does.
+        var ctor = typeof(InMemoryOutboxStorage).GetConstructor(Type.EmptyTypes);
+
+        Assert.NotNull(ctor);
+        var instance = Assert.IsType<InMemoryOutboxStorage>(ctor!.Invoke(null));
+        Assert.NotNull(instance);
+    }
+
+    [Fact]
+    public async Task ParameterlessConstructor_ShouldBehaveAsArchiveModeDefault_NotPurge()
+    {
+        // The binary-compat parameterless overload must delegate to the new ctor with purgeOnArchive:false,
+        // i.e. behave identically to the documented default (reaped rows are archived, not purged).
+        var storage = new InMemoryOutboxStorage();
+        var processedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var row = NewPending(enqueuedAtUtc: processedAt);
+        await storage.AppendAsync(new[] { row });
+        await storage.ClaimNextAsync(10, "d", TimeSpan.FromMinutes(1));
+        await storage.CompleteAsync(row.Id, processedAt);
+
+        var reaped = await storage.ArchiveProcessedAsync(TimeSpan.Zero, processedAt.AddHours(1));
+
+        Assert.Equal(1, reaped);
+        // Archive mode (default): the reaped row is retained in the archive, not discarded.
+        Assert.Single(storage.ArchivedRows);
+        Assert.Equal(row.Id, storage.ArchivedRows.First().Id);
+    }
+
+    [Fact]
     public async Task QueueDepthAsync_ShouldCountPending_WhenInvoked()
     {
         var storage = new InMemoryOutboxStorage();

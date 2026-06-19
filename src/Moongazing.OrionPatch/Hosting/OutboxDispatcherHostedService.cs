@@ -336,9 +336,18 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                     // exposes one. Routing removes the row from the active outbox (so it can never
                     // be reclaimed or retried) and records the final failure context exactly once.
                     // Storage that does not implement IDeadLetterStore keeps the in-place status flip.
+                    // v0.3.0 fix (codex P2): gate the dead-letter side effects on whether the store
+                    // actually routed the row. IDeadLetterStore.DeadLetterAsync returns false for an
+                    // idempotent no-op (e.g. two dispatchers handling the same exhausted row after a
+                    // lease expiry: the second sees the row already dead-lettered/gone). Running the
+                    // telemetry increment + sink notification on a no-op would double-count the
+                    // dead_letter metric and fire duplicate triage alerts. The legacy in-place
+                    // status-flip path (storage WITHOUT IDeadLetterStore) has no idempotency signal,
+                    // so it is treated as a routing event (routed = true) to preserve prior behavior.
+                    bool routed;
                     if (storage is IDeadLetterStore deadLetterStore)
                     {
-                        await deadLetterStore.DeadLetterAsync(
+                        routed = await deadLetterStore.DeadLetterAsync(
                             row.Id,
                             new DeadLetterContext(truncated, attempt, clock.UtcNow),
                             cancellationToken).ConfigureAwait(false);
@@ -346,7 +355,18 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
                     else
                     {
                         await storage.DeadLetterAsync(row.Id, truncated, cancellationToken).ConfigureAwait(false);
+                        routed = true;
                     }
+
+                    if (!routed)
+                    {
+                        // Idempotent replay: the row was already routed by another dispatcher, so no
+                        // new dead-letter occurred. Skip telemetry + sink to avoid double-counting and
+                        // duplicate alerts. The row is already out of the active outbox.
+                        activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                        return;
+                    }
+
                     OrionPatchDiagnostics.DeadLettered.Add(1);
                     // v0.2.29: record the outbox dwell time (enqueue -> dead-letter) AFTER the
                     // terminal state is persisted, the failure-path analog to the v0.2.21
