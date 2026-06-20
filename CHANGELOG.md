@@ -6,6 +6,12 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-20
+
+### Changed
+
+- The Kafka inbound diagnostics `Meter` version is now derived from the owning assembly's `AssemblyInformationalVersionAttribute` at runtime instead of a hardcoded `"0.2.14"` string, so the metric version tracks the package version automatically and no longer drifts on release. The resolver reads only its own assembly's version.
+
 ## [0.3.0] - 2026-06-19
 
 ### Added
