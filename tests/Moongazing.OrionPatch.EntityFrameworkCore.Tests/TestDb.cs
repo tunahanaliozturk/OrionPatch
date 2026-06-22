@@ -10,6 +10,30 @@ internal static class TestDb
     {
         var connection = new SqliteConnection("DataSource=:memory:");
         await connection.OpenAsync();
+        return await CreateAsync(connection);
+    }
+
+    /// <summary>
+    /// Open an in-memory SQLite connection that outlives a single <see cref="AppDbContext"/>. The
+    /// schema and data persist for as long as the connection is open, so several contexts created
+    /// over the same connection (via <see cref="CreateAsync(SqliteConnection)"/>) share one database.
+    /// Used to exercise cross-context behavior such as a crash-replayed terminal path running on a
+    /// fresh scope. The caller owns the connection's lifetime.
+    /// </summary>
+    public static SqliteConnection OpenSharedConnection()
+    {
+        var connection = new SqliteConnection("DataSource=:memory:");
+        connection.Open();
+        return connection;
+    }
+
+    /// <summary>
+    /// Create a context bound to the supplied connection. <see cref="DbContext.Database"/>'s
+    /// <c>EnsureCreatedAsync</c> is idempotent, so calling this repeatedly over one shared
+    /// connection reuses the already-created schema.
+    /// </summary>
+    public static async Task<AppDbContext> CreateAsync(SqliteConnection connection)
+    {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(connection)
             .AddInterceptors(new OrionPatchSaveChangesInterceptor())

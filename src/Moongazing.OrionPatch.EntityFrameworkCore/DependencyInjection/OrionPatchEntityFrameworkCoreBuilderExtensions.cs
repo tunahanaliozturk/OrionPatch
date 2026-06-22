@@ -38,6 +38,10 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
     /// the same per-scope instance bound to <typeparamref name="TDbContext"/>.</item>
     /// <item><see cref="EfCoreOutboxStorage"/> and <see cref="IOutboxStorage"/> as scoped,
     /// both resolving to the same per-scope instance bound to <typeparamref name="TDbContext"/>.</item>
+    /// <item>From v0.3.2, the same scoped <see cref="EfCoreOutboxStorage"/> instance is also exposed
+    /// as <see cref="IDeadLetterStore"/> and <see cref="IOutboxArchivalStore"/>, so the dispatcher
+    /// routes exhausted rows into the durable dead-letter table and an operator-invoked job can
+    /// resolve <see cref="IOutboxArchivalStore"/> to reap processed rows past the retention window.</item>
     /// </list>
     /// </para>
     /// <para>
@@ -57,6 +61,25 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
     /// </remarks>
     public static OrionPatchBuilder UseEntityFrameworkCore<TDbContext>(this OrionPatchBuilder builder)
         where TDbContext : DbContext
+        => builder.UseEntityFrameworkCore<TDbContext>(purgeOnArchive: false);
+
+    /// <summary>
+    /// Register OrionPatch's EF Core storage backend bound to <typeparamref name="TDbContext"/>,
+    /// choosing how <see cref="IOutboxArchivalStore.ArchiveProcessedAsync"/> disposes of reaped rows.
+    /// </summary>
+    /// <typeparam name="TDbContext">The consumer's <see cref="DbContext"/>; see the parameterless overload for the registration requirement.</typeparam>
+    /// <param name="builder">Builder returned from <c>AddOrionPatch</c>; must be non-null.</param>
+    /// <param name="purgeOnArchive">
+    /// When <see langword="false"/> (the default and the behavior of the parameterless overload),
+    /// reaped processed rows are copied into the <c>OrionPatch_OutboxArchive</c> table before being
+    /// removed from the active outbox, and are readable via <see cref="IOutboxArchivalStore.GetArchivedAsync"/>.
+    /// When <see langword="true"/>, reaped rows are deleted outright (purge mode) and the archive table
+    /// is never written; choose this when retained rows have no audit value and storage is the priority.
+    /// </param>
+    /// <returns>The same <paramref name="builder"/> for fluent chaining.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is null.</exception>
+    public static OrionPatchBuilder UseEntityFrameworkCore<TDbContext>(this OrionPatchBuilder builder, bool purgeOnArchive)
+        where TDbContext : DbContext
     {
         ArgumentNullException.ThrowIfNull(builder);
 
@@ -72,8 +95,11 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
         builder.Services.AddScoped<IOutbox>(sp => sp.GetRequiredService<EfCoreOutbox>());
 
         builder.Services.AddScoped(sp => new EfCoreOutboxStorage(
-            sp.GetRequiredService<TDbContext>()));
+            sp.GetRequiredService<TDbContext>(),
+            purgeOnArchive));
         builder.Services.AddScoped<IOutboxStorage>(sp => sp.GetRequiredService<EfCoreOutboxStorage>());
+        builder.Services.AddScoped<IDeadLetterStore>(sp => sp.GetRequiredService<EfCoreOutboxStorage>());
+        builder.Services.AddScoped<IOutboxArchivalStore>(sp => sp.GetRequiredService<EfCoreOutboxStorage>());
 
         return builder;
     }
