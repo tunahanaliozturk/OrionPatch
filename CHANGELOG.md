@@ -6,6 +6,21 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-22
+
+### Added
+
+#### Dead-letter and archival on the EF Core backend
+
+v0.3.0 shipped the `IDeadLetterStore` and `IOutboxArchivalStore` SPIs but implemented them only on the in-memory testing storage; on the EF Core backend dead-lettering fell back to the in-place status flip and archival was unavailable. This release brings both SPIs to the production EF Core backend (`OrionPatch.EntityFrameworkCore`), so deployments get the durable dead-letter destination and the retention reaper without writing their own storage. Purely additive: existing public APIs and their behavior are unchanged.
+
+- `EfCoreOutboxStorage` now also implements `IDeadLetterStore` and `IOutboxArchivalStore` in addition to `IOutboxStorage`.
+- `IDeadLetterStore.DeadLetterAsync(rowId, DeadLetterContext, ct)` deletes the source row from `OrionPatch_Outbox` and inserts a snapshot into the new `OrionPatch_DeadLetter` table inside a single explicit transaction, so the move is atomic. Routing is idempotent on the dead-letter primary key (the source row id): a replayed terminal path either finds the row already routed (pre-check) or loses the insert race and trips the primary-key constraint (caught), and both report the exactly-once no-op. Matches the in-memory store's semantics exactly.
+- `GetDeadLetteredAsync(ct)` reads back the most recent dead-letters (newest first, bounded). A new `GetDeadLetteredAsync(skip, take, ct)` overload pages over a large backlog for triage tooling, which the SPI's unbounded snapshot signature cannot express on a relational store.
+- `IOutboxArchivalStore.ArchiveProcessedAsync(retention, nowUtc, ct)` reaps `Processed` rows whose `ProcessedAtUtc <= nowUtc - retention` out of the active outbox in bounded batches (so a large backlog does not take one long lock) and returns the count moved. Archive mode copies reaped rows into the new `OrionPatch_OutboxArchive` table before deleting them; purge mode deletes outright and leaves the archive empty. The cutoff is inclusive and the reap is idempotent and incremental, matching the in-memory store. Deletes target an explicit id set rather than `DELETE ... LIMIT`, so the reap is portable across providers.
+- Archive vs purge mode is selected at registration via a new `UseEntityFrameworkCore<TDbContext>(purgeOnArchive: true)` overload; the parameterless overload keeps the archive-mode default. The same scoped `EfCoreOutboxStorage` instance is now also resolvable as `IDeadLetterStore` and `IOutboxArchivalStore`. As before, archival is operator-invoked from the consumer's own scheduled job; OrionPatch does not start a background reaper.
+- New entities and configurations wired into `ApplyOrionPatchConfiguration()`: `DeadLetterRow` (`OrionPatch_DeadLetter`, keyed on the source row id, indexed by `DeadLetteredAtUtc`) and `OutboxArchiveRow` (`OrionPatch_OutboxArchive`, indexed by `ProcessedAtUtc`). The runtime never creates tables; regenerate a migration (`dotnet ef migrations add OrionPatch_v0_3_2_DeadLetterAndArchive`) and apply it. The new tables are inert until the dead-letter store or the reaper is invoked, and the migration is additive (no existing column or index changes).
+
 ## [0.3.1] - 2026-06-20
 
 ### Changed

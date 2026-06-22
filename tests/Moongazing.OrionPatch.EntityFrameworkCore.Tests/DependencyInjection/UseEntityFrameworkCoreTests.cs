@@ -41,6 +41,43 @@ public class UseEntityFrameworkCoreTests
     }
 
     [Fact]
+    public void UseEntityFrameworkCore_ShouldExposeStorageAsDeadLetterAndArchivalStore_OnSameInstance()
+    {
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+
+        var storage = scope.ServiceProvider.GetRequiredService<IOutboxStorage>();
+        var deadLetter = scope.ServiceProvider.GetRequiredService<IDeadLetterStore>();
+        var archival = scope.ServiceProvider.GetRequiredService<IOutboxArchivalStore>();
+
+        Assert.IsType<EfCoreOutboxStorage>(deadLetter);
+        Assert.IsType<EfCoreOutboxStorage>(archival);
+        // All three abstractions resolve to the one per-scope storage so the dead-letter move and
+        // the reap run against the same bound DbContext as the outbox lifecycle.
+        Assert.Same(storage, deadLetter);
+        Assert.Same(storage, archival);
+    }
+
+    [Fact]
+    public void UseEntityFrameworkCore_PurgeOverload_ShouldReturnSameBuilder_WhenCalled()
+    {
+        var services = new ServiceCollection();
+        var builder = services.AddOrionPatch();
+
+        var returned = builder.UseEntityFrameworkCore<DiAppDbContext>(purgeOnArchive: true);
+
+        Assert.Same(builder, returned);
+    }
+
+    [Fact]
+    public void UseEntityFrameworkCore_PurgeOverload_ShouldThrow_WhenBuilderIsNull()
+    {
+        OrionPatchBuilder builder = null!;
+
+        Assert.Throws<ArgumentNullException>(() => builder.UseEntityFrameworkCore<DiAppDbContext>(purgeOnArchive: true));
+    }
+
+    [Fact]
     public void UseEntityFrameworkCore_ShouldRegisterInterceptorAsSingleton_WhenCalled()
     {
         using var provider = BuildProvider();
