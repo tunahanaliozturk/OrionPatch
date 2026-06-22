@@ -89,9 +89,10 @@ The original v0.2.0 milestone listed four other items. New targets:
 ## v0.3.0 - Dead-letter store and archival *(shipped 2026-06-19)*
 
 Two outbox-maintenance capabilities, both expressed as optional SPIs on the storage backend
-rather than separate services: a storage type opts in by implementing the interface, and the
-dispatcher uses it when present. Storage that does not implement them keeps the prior behaviour,
-so both are backward compatible.
+rather than separate services: a storage type opts in by implementing the interface. The dispatcher
+routes to the dead-letter SPI on a row's terminal path; archival is operator-invoked (see the archival
+bullet below), not run by the dispatcher, so processed rows accumulate until an operator schedules it.
+Storage that does not implement these keeps the prior behaviour, so both are backward compatible.
 
 - **`IDeadLetterStore`** - when a row exhausts `MaxAttempts`, the dispatcher prefers to route it
   OUT of the hot outbox into a durable dead-letter store (appending a `DeadLetteredMessage`
