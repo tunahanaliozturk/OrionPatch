@@ -103,6 +103,41 @@ public class EfCoreDeadLetterStoreTests
     }
 
     [Fact]
+    public async Task DeadLetterAsync_ShouldRethrow_WhenInsertFailsForNonUniqueReason()
+    {
+        // A DbUpdateException from the dead-letter insert is the idempotent no-op ONLY when it is
+        // a verified unique-key violation on the dead-letter row (its id already present). Any
+        // OTHER persistence failure - here a schema mismatch standing in for the real "dead-letter
+        // migration was not applied" / transient / other-constraint cases - MUST propagate, not be
+        // swallowed as "already routed". Swallowing it would let the dispatcher skip the
+        // dead-letter sinks while the rolled-back source row silently retries after lease expiry.
+        var connection = TestDb.OpenSharedConnection();
+        await using var db = await TestDb.CreateAsync(connection);
+
+        var row = NewClaimed();
+        db.Add(row);
+        await db.SaveChangesAsync();
+
+        // Recreate OrionPatch_DeadLetter with ONLY the Id column. The id-keyed idempotency
+        // pre-check and the catch's existence re-query both read by Id alone, so they still
+        // succeed (row absent); but EF Core's INSERT lists every mapped column, so it fails with a
+        // non-constraint schema error ("table ... has no column named MessageType") surfaced as a
+        // DbUpdateException - exactly a non-unique-violation failure that must NOT be classified
+        // as a duplicate.
+        await db.Database.ExecuteSqlRawAsync("DROP TABLE OrionPatch_DeadLetter");
+        await db.Database.ExecuteSqlRawAsync("CREATE TABLE OrionPatch_DeadLetter (Id TEXT NOT NULL CONSTRAINT PK_OrionPatch_DeadLetter PRIMARY KEY)");
+
+        await Assert.ThrowsAnyAsync<DbUpdateException>(() =>
+            Storage(db).DeadLetterAsync(row.Id, new DeadLetterContext("boom", 5, Now), CancellationToken.None));
+
+        // The source row must remain intact (the failed move rolled back), so it is retried/dead-
+        // lettered correctly rather than dropped.
+        Assert.Equal(1, await db.Set<OutboxRow>().AsNoTracking().CountAsync());
+
+        await connection.DisposeAsync();
+    }
+
+    [Fact]
     public async Task DeadLetterAsync_ShouldReturnFalse_WhenRowDoesNotExist()
     {
         await using var db = await TestDb.CreateAsync();

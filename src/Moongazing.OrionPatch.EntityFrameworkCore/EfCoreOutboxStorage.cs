@@ -269,15 +269,42 @@ public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOut
             }
             catch (DbUpdateException)
             {
-                // Lost the race to a concurrent terminal path that inserted the same id first.
-                // Treat the primary-key violation as the idempotent no-op. Detach the rejected
-                // entity so a later SaveChanges on this context does not retry the insert.
+                // The insert failed. This is ONLY the idempotent no-op when it was a genuine
+                // unique-key violation on the dead-letter primary key (the source row id) - i.e.
+                // a concurrent terminal path inserted the same id first. Any other failure
+                // (the dead-letter table is missing because its migration was not applied, a
+                // transient error, a different constraint) MUST surface so the dispatcher can
+                // dead-letter/retry the row rather than the caller mistaking it for "already
+                // routed", skipping the dead-letter sinks, and silently dropping the message.
+                //
+                // Distinguish the two the same way EfCoreInbox.TryAcceptAsync does: re-query the
+                // table for the row's existence instead of sniffing provider-specific SqlState
+                // codes (this package references no provider, so it cannot type-match
+                // PostgresException/SqlException/SqliteException). If the row is now present the
+                // failure was the duplicate; otherwise it was a real persistence failure.
+                //
+                // Detach the rejected entity first so a later SaveChanges on this context does
+                // not retry the insert.
                 db.ChangeTracker.Clear();
+
+                var alreadyPersisted = await db.Set<DeadLetterRow>()
+                    .AsNoTracking()
+                    .AnyAsync(d => d.Id == rowId, cancellationToken).ConfigureAwait(false);
+
                 if (ownsTransaction && transaction is not null)
                 {
                     await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
                 }
-                return false;
+
+                if (alreadyPersisted)
+                {
+                    // Verified duplicate-key violation: the row is already dead-lettered. No-op.
+                    return false;
+                }
+
+                // Not a duplicate (missing table, transient, other constraint): surface it so the
+                // source row stays claimed-but-intact and is retried/dead-lettered correctly.
+                throw;
             }
 
             await db.Set<OutboxRow>()
