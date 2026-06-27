@@ -212,4 +212,177 @@ public class EfCoreDeadLetterReplayStoreTests
         Assert.Equal(0, await db.Set<DeadLetterRow>().AsNoTracking().CountAsync());
         Assert.Equal(5, await db.Set<OutboxRow>().AsNoTracking().CountAsync());
     }
+
+    [Fact]
+    public async Task RedriveAsync_ById_ShouldNotDiscardCallersOtherTrackedChanges_NoChangeTrackerClear()
+    {
+        // FINDING 1 (data loss): the redrive must NOT clear the whole change tracker. A caller that
+        // staged unrelated entities on the same shared DbContext must keep that data after a redrive.
+        // The prior ChangeTracker.Clear() silently DISCARDED these entries, so they would never
+        // persist - this test asserts they survive. (Only the conflicting outbox row id is detached.)
+        await using var db = await TestDb.CreateAsync();
+        var row = await SeedDeadLetterAsync(db);
+
+        // The caller stages two unrelated entities on the SAME context - exactly the brownfield
+        // "shared DbContext, mixed tracked work" hazard the prior Clear() obliterated.
+        var pendingSample = new Sample { Id = Guid.NewGuid(), Name = "keep-me" };
+        var pendingOutbox = new OutboxRow
+        {
+            Id = Guid.NewGuid(),
+            MessageType = "Other",
+            Payload = "{\"keep\":true}",
+            HeadersJson = null,
+            CorrelationId = "other-corr",
+            OccurredAtUtc = Now,
+            EnqueuedAtUtc = Now,
+            Status = OutboxStatus.Pending,
+            AttemptCount = 0,
+            NextAttemptAtUtc = Now,
+        };
+        db.Add(pendingSample);
+        db.Add(pendingOutbox);
+
+        var moved = await Storage(db).RedriveAsync(row.Id, CancellationToken.None);
+        Assert.True(moved);
+
+        // The caller's unrelated entities are STILL tracked (not detached/discarded by a Clear): each
+        // is in a persisting state, never Detached. Under the old Clear() they would be gone entirely.
+        Assert.NotEqual(EntityState.Detached, db.Entry(pendingSample).State);
+        Assert.NotEqual(EntityState.Detached, db.Entry(pendingOutbox).State);
+
+        // And their data survives end-to-end: committing the caller's unit of work persists both,
+        // then a no-tracking read pulls them back from the database. Under the old Clear() these rows
+        // were discarded before the caller's SaveChanges ever saw them, so neither would exist.
+        await db.SaveChangesAsync();
+        Assert.NotNull(await db.Set<Sample>().AsNoTracking().FirstOrDefaultAsync(s => s.Id == pendingSample.Id));
+        Assert.NotNull(await db.Set<OutboxRow>().AsNoTracking().FirstOrDefaultAsync(r => r.Id == pendingOutbox.Id));
+
+        // The redriven row landed too, and the dead-letter row is gone.
+        Assert.NotNull(await db.Set<OutboxRow>().AsNoTracking().FirstOrDefaultAsync(r => r.Id == row.Id));
+        Assert.Equal(0, await db.Set<DeadLetterRow>().AsNoTracking().CountAsync());
+    }
+
+    [Fact]
+    public async Task RedriveAsync_ById_ShouldBeIdempotent_WhenConcurrentRedriveAlreadyEnqueued_AndNotThrow()
+    {
+        // FINDING 2: a concurrent redrive that already inserted the fresh outbox row (the redrive
+        // reuses the source id, so the second insert hits the outbox PK) must be reconciled as a
+        // verified duplicate - a skip (false) - not thrown, and the dead-letter row must still be
+        // removed so the message ends up live exactly once.
+        var connection = TestDb.OpenSharedConnection();
+        try
+        {
+            await using var db = await TestDb.CreateAsync(connection);
+            var row = await SeedDeadLetterAsync(db);
+
+            // Simulate the winning concurrent redrive: a live pending outbox row already exists under
+            // the same (reused) id, while the dead-letter row is still present.
+            await using (var other = await TestDb.CreateAsync(connection))
+            {
+                other.Add(new OutboxRow
+                {
+                    Id = row.Id,
+                    MessageType = "T",
+                    Payload = "{\"v\":1}",
+                    HeadersJson = null,
+                    CorrelationId = "corr-1",
+                    OccurredAtUtc = Now,
+                    EnqueuedAtUtc = Now,
+                    Status = OutboxStatus.Pending,
+                    AttemptCount = 0,
+                    NextAttemptAtUtc = Now,
+                });
+                await other.SaveChangesAsync();
+            }
+
+            // This redrive loses the race on the insert; it must NOT throw.
+            var moved = await Storage(db).RedriveAsync(row.Id, CancellationToken.None);
+
+            Assert.False(moved); // verified duplicate -> skip
+            // Exactly one live row (no duplicate), dead-letter row reconciled away.
+            Assert.Equal(1, await db.Set<OutboxRow>().AsNoTracking().CountAsync(r => r.Id == row.Id));
+            Assert.Equal(0, await db.Set<DeadLetterRow>().AsNoTracking().CountAsync());
+        }
+        finally
+        {
+            await connection.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RedriveAsync_Bulk_ShouldCrossFullAllSkipBatch_AndStillRedriveLaterRows()
+    {
+        // FINDING 3: a full batch in which every row is skipped must NOT terminate the sweep. The
+        // loop must keep paging until no more matching dead-letter rows remain.
+        await using var db = await TestDb.CreateAsync();
+
+        // Seed 4 dead-letter rows of type "T", newest-first ordering by DeadLetteredAtUtc:
+        //   newest two (i=3,2) are pre-enqueued live (so they redrive as verified-duplicate SKIPS),
+        //   oldest two (i=1,0) are not (so they REDRIVE).
+        var rows = new List<OutboxRow>();
+        for (var i = 0; i < 4; i++)
+        {
+            rows.Add(await SeedDeadLetterAsync(db, "T", Now.AddMinutes(i)));
+        }
+
+        // Seeding (append source rows, then dead-letter them) leaves the source OutboxRow instances
+        // tracked as Unchanged on this shared context. Detach them before re-adding live rows below
+        // so the test's own setup does not collide on the identity map.
+        db.ChangeTracker.Clear();
+
+        // Pre-enqueue the two newest ids' live outbox rows so the first full batch is all skips.
+        foreach (var r in rows.Skip(2))
+        {
+            db.Add(new OutboxRow
+            {
+                Id = r.Id,
+                MessageType = "T",
+                Payload = "{\"v\":1}",
+                HeadersJson = null,
+                CorrelationId = "corr-1",
+                OccurredAtUtc = Now,
+                EnqueuedAtUtc = Now,
+                Status = OutboxStatus.Pending,
+                AttemptCount = 0,
+                NextAttemptAtUtc = Now,
+            });
+        }
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        // batchSize 2: batch 1 = the two newest (both skipped, full batch). A redriven==0 early-exit
+        // would strand the older two; correct paging must continue and redrive them.
+        var result = await Storage(db).RedriveAsync(
+            new RedriveFilter(MessageType: "T"), batchSize: 2, CancellationToken.None);
+
+        Assert.Equal(2, result.Redriven);
+        Assert.Equal(2, result.Skipped);
+        // All dead-letter rows are drained (skips reconcile their dead-letter rows away too).
+        Assert.Equal(0, await db.Set<DeadLetterRow>().AsNoTracking().CountAsync());
+        // The two older ids are now live; the two pre-enqueued ids remain (one each, no duplicates).
+        Assert.Equal(4, await db.Set<OutboxRow>().AsNoTracking().CountAsync());
+        foreach (var r in rows)
+        {
+            Assert.Equal(1, await db.Set<OutboxRow>().AsNoTracking().CountAsync(x => x.Id == r.Id));
+        }
+    }
+
+    [Fact]
+    public async Task RedriveAsync_Bulk_MessageTypeMatch_ShouldBeOrdinalCaseSensitive()
+    {
+        // FINDING 6: MessageType filtering is exact, case-sensitive, ordinal - identical to the
+        // in-memory store. A differently-cased filter must match nothing.
+        await using var db = await TestDb.CreateAsync();
+        await SeedDeadLetterAsync(db, "OrderShipped", Now);
+
+        var wrongCase = await Storage(db).RedriveAsync(
+            new RedriveFilter(MessageType: "ordershipped"), batchSize: 10, CancellationToken.None);
+        Assert.Equal(0, wrongCase.Redriven);
+        Assert.Equal(1, await db.Set<DeadLetterRow>().AsNoTracking().CountAsync());
+
+        var exact = await Storage(db).RedriveAsync(
+            new RedriveFilter(MessageType: "OrderShipped"), batchSize: 10, CancellationToken.None);
+        Assert.Equal(1, exact.Redriven);
+        Assert.Equal(0, await db.Set<DeadLetterRow>().AsNoTracking().CountAsync());
+    }
 }

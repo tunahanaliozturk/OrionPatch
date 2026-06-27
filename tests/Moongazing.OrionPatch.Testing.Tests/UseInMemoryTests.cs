@@ -56,4 +56,38 @@ public class UseInMemoryTests
 
         Assert.Single(all);
     }
+
+    [Fact]
+    public void UseInMemory_ShouldExposeStorageAsDeadLetterArchivalAndReplayStores_OnSameInstance()
+    {
+        // FINDING 4: the in-memory registration must expose the dead-letter, archival, and v0.3.3
+        // redrive capabilities (all backed by the one storage singleton), mirroring the EF Core
+        // registration, so a test host can resolve IDeadLetterReplayStore.
+        var services = new ServiceCollection();
+        services.AddOrionPatch().UseInMemory();
+
+        var sp = services.BuildServiceProvider();
+        var storage = sp.GetRequiredService<IOutboxStorage>();
+        var deadLetter = sp.GetRequiredService<IDeadLetterStore>();
+        var archival = sp.GetRequiredService<IOutboxArchivalStore>();
+        var replay = sp.GetRequiredService<IDeadLetterReplayStore>();
+
+        Assert.IsType<InMemoryOutboxStorage>(replay);
+        Assert.Same(storage, deadLetter);
+        Assert.Same(storage, archival);
+        Assert.Same(storage, replay);
+    }
+
+    [Fact]
+    public void UseInMemory_CalledTwice_ShouldResolveSingleReplayStore()
+    {
+        var services = new ServiceCollection();
+        services.AddOrionPatch()
+            .UseInMemory()
+            .UseInMemory();
+
+        var sp = services.BuildServiceProvider();
+
+        Assert.Single(sp.GetServices<IDeadLetterReplayStore>());
+    }
 }

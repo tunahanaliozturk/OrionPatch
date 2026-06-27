@@ -59,6 +59,21 @@ public class UseEntityFrameworkCoreTests
     }
 
     [Fact]
+    public void UseEntityFrameworkCore_ShouldExposeStorageAsReplayStore_OnSameInstance()
+    {
+        // FINDING 4: the v0.3.3 redrive store must be resolvable, on the same per-scope instance as
+        // the outbox/dead-letter/archival stores, so an operator redrive job can resolve it.
+        using var provider = BuildProvider();
+        using var scope = provider.CreateScope();
+
+        var storage = scope.ServiceProvider.GetRequiredService<IOutboxStorage>();
+        var replay = scope.ServiceProvider.GetRequiredService<IDeadLetterReplayStore>();
+
+        Assert.IsType<EfCoreOutboxStorage>(replay);
+        Assert.Same(storage, replay);
+    }
+
+    [Fact]
     public void UseEntityFrameworkCore_PurgeOverload_ShouldReturnSameBuilder_WhenCalled()
     {
         var services = new ServiceCollection();

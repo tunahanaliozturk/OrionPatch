@@ -22,7 +22,14 @@ namespace Moongazing.OrionPatch.Models;
 /// reasons about when recovering from a dated outage.
 /// </para>
 /// </remarks>
-/// <param name="MessageType">When set, only messages whose logical <see cref="DeadLetteredMessage.MessageType"/> equals this value (ordinal) are redriven.</param>
+/// <param name="MessageType">
+/// When set, only messages whose logical <see cref="DeadLetteredMessage.MessageType"/> equals this
+/// value are redriven. The comparison is an exact, case-sensitive, ordinal match (no normalization,
+/// trimming, or culture folding) and is identical across every store: the in-memory store evaluates
+/// it via <see cref="Matches"/> using <see cref="System.StringComparison.Ordinal"/>, and the
+/// relational stores translate it to a binary-collation <c>WHERE MessageType = @value</c>, so the
+/// same filter selects the same set on either backend.
+/// </param>
 /// <param name="DeadLetteredAtOrAfterUtc">When set, only messages dead-lettered at or after this UTC instant are redriven (inclusive lower bound).</param>
 /// <param name="DeadLetteredBeforeUtc">When set, only messages dead-lettered strictly before this UTC instant are redriven (exclusive upper bound).</param>
 public readonly record struct RedriveFilter(

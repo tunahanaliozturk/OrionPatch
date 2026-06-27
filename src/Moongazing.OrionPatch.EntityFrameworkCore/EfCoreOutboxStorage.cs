@@ -625,11 +625,14 @@ public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOut
             OrionPatchDiagnostics.RecordRedriven(redriven);
             result += new RedriveResult(redriven, skipped);
 
-            // A short batch means the candidate set is exhausted; skipped ids (concurrently removed)
-            // are not re-shortlisted because the next query reads the live table. Guard against a
-            // pathological all-skip batch (every shortlisted id vanished) looping forever by
-            // stopping when nothing actually moved out of a full-size batch.
-            if (batchIds.Count < batchSize || redriven == 0)
+            // Termination depends only on "no more matching rows were fetched", never on "nothing
+            // was redriven this batch". A full all-skip batch must NOT stop the sweep: skips happen
+            // for ids a concurrent caller redrove or removed, and stopping on redriven == 0 would
+            // strand every still-eligible row paged in after such a batch. Forward progress is
+            // guaranteed because RedriveOneCoreAsync removes the dead-letter row for every id it
+            // handles - redriven AND verified-duplicate skips alike - so the next query reads a
+            // strictly smaller live candidate set and the loop cannot spin on the same ids forever.
+            if (batchIds.Count < batchSize)
             {
                 break;
             }
@@ -642,9 +645,25 @@ public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOut
     /// Move one dead-lettered message into the active outbox: read the <see cref="DeadLetterRow"/>,
     /// insert a fresh pending <see cref="OutboxRow"/> (reset attempt count, cleared failure context,
     /// stamped <see cref="IDeadLetterReplayStore.RedrivenFromHeader"/> header), and delete the
-    /// dead-letter row. Assumes the caller has opened the enclosing transaction. Returns
-    /// <see langword="false"/> as the idempotent no-op when the dead-letter row is already gone.
+    /// dead-letter row. Assumes the caller has opened the enclosing transaction.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Returns <see langword="false"/> as the idempotent no-op when the dead-letter row is already
+    /// gone, or when a concurrent redrive already inserted the fresh outbox row (a verified
+    /// duplicate). In every case where this returns - true or false - the dead-letter row for
+    /// <paramref name="messageId"/> is gone afterwards, so a bulk sweep that re-queries the live
+    /// dead-letter table never re-shortlists an id this call already handled and always makes
+    /// forward progress.
+    /// </para>
+    /// <para>
+    /// The redrive reuses the source row id as the new outbox row id, so two concurrent redrives of
+    /// the same id race on the outbox primary key. The losing insert trips the constraint; that is
+    /// reconciled the same way <see cref="DeadLetterAsync(Guid, DeadLetterContext, CancellationToken)"/>
+    /// reconciles its own dup-key (re-query the row's existence rather than sniff a provider-specific
+    /// SqlState), and a verified duplicate is reported as the no-op while any other failure surfaces.
+    /// </para>
+    /// </remarks>
     private async Task<bool> RedriveOneCoreAsync(Guid messageId, CancellationToken cancellationToken)
     {
         var dead = await db.Set<DeadLetterRow>()
@@ -665,14 +684,31 @@ public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOut
             return false;
         }
 
-        // Clear any tracked entity carrying this id before adding the fresh row. The storage never
-        // tracks OutboxRow itself (every read is AsNoTracking), but the redrive reuses the source
-        // row id as the new row id, and a consumer that tracked the original row on this shared
-        // DbContext would otherwise collide on the identity map. Clearing keeps the add safe.
-        db.ChangeTracker.Clear();
+        // Idempotency pre-check: if a live outbox row already carries this (reused source) id, a
+        // prior or concurrent redrive already re-enqueued it. Skip the insert, but still delete the
+        // dead-letter row below so the message ends up live exactly once and a bulk sweep does not
+        // re-shortlist it. This also keeps the common concurrent case off the dup-insert path.
+        var alreadyLive = await db.Set<OutboxRow>()
+            .AsNoTracking()
+            .AnyAsync(r => r.Id == messageId, cancellationToken).ConfigureAwait(false);
+        if (alreadyLive)
+        {
+            await db.Set<DeadLetterRow>()
+                .Where(d => d.Id == messageId)
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        // The redrive reuses the source row id as the new outbox row id. The storage never tracks
+        // OutboxRow itself (every read is AsNoTracking), but a consumer sharing this DbContext may
+        // have tracked the original row, or a prior loop iteration may have left the just-inserted
+        // row tracked. Detach ONLY the conflicting entry for this id so the Add does not collide on
+        // the identity map, while preserving every other tracked change the caller owns. (Clearing
+        // the whole change tracker here would silently discard the caller's unrelated pending work.)
+        DetachTrackedOutboxRow(messageId);
 
         var now = DateTime.UtcNow;
-        db.Add(new OutboxRow
+        var inserted = new OutboxRow
         {
             Id = messageId,
             MessageType = dead.MessageType,
@@ -684,15 +720,65 @@ public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOut
             Status = OutboxStatus.Pending,
             AttemptCount = 0,
             NextAttemptAtUtc = now,
-        });
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
+        };
+        db.Add(inserted);
+
+        var redriven = true;
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException)
+        {
+            // The insert failed. This is ONLY the idempotent no-op when it was a genuine unique-key
+            // violation on the outbox primary key (the reused source row id) - i.e. a concurrent
+            // redrive inserted the same id first. Any other failure (missing table, transient error,
+            // a different constraint) MUST surface. Distinguish the two the same way DeadLetterAsync
+            // does: re-query the live outbox for the row rather than sniffing a provider-specific
+            // SqlState code (this package references no provider). Detach the rejected entity first so
+            // a later SaveChanges on this context does not retry the insert.
+            db.Entry(inserted).State = EntityState.Detached;
+
+            var raceLostToDuplicate = await db.Set<OutboxRow>()
+                .AsNoTracking()
+                .AnyAsync(r => r.Id == messageId, cancellationToken).ConfigureAwait(false);
+            if (!raceLostToDuplicate)
+            {
+                throw;
+            }
+
+            // Verified duplicate: a concurrent redrive already re-enqueued this id. Fall through to
+            // delete the dead-letter row (idempotently) and report the no-op so the message is never
+            // both live and dead-lettered, and the bulk sweep does not re-shortlist it forever.
+            redriven = false;
+        }
+
+        // Detach the inserted (or duplicate-rejected) row so a later iteration on this shared
+        // DbContext does not re-track or re-collide on the id, without touching the caller's entries.
+        DetachTrackedOutboxRow(messageId);
 
         await db.Set<DeadLetterRow>()
             .Where(d => d.Id == messageId)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
-        return true;
+        return redriven;
+    }
+
+    /// <summary>
+    /// Detach the single tracked <see cref="OutboxRow"/> carrying <paramref name="id"/>, if one is
+    /// tracked, leaving every other tracked entry on the shared <see cref="DbContext"/> intact.
+    /// Used to clear the identity-map conflict the redrive's source-id reuse would otherwise cause
+    /// without discarding the caller's unrelated pending changes.
+    /// </summary>
+    private void DetachTrackedOutboxRow(Guid id)
+    {
+        var tracked = db.ChangeTracker
+            .Entries<OutboxRow>()
+            .FirstOrDefault(e => e.Entity.Id == id);
+        if (tracked is not null)
+        {
+            tracked.State = EntityState.Detached;
+        }
     }
 
     /// <summary>Apply a <see cref="RedriveFilter"/> as a server-side <c>WHERE</c> over the dead-letter table.</summary>
@@ -702,6 +788,12 @@ public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOut
 
         if (filter.MessageType is { } messageType)
         {
+            // Exact, case-sensitive, ordinal match, kept identical to the in-memory store's
+            // StringComparison.Ordinal in RedriveFilter.Matches. The MessageType column is mapped
+            // without an explicit collation, so this == translates to the provider's binary-default
+            // comparison (SQLite BINARY, PostgreSQL/SQL Server case-sensitive by column collation),
+            // which is the ordinal byte comparison the in-memory store performs. Both backends
+            // therefore select the same set for the same filter.
             query = query.Where(d => d.MessageType == messageType);
         }
 

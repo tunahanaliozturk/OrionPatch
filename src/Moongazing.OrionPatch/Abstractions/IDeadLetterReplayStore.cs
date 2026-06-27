@@ -46,7 +46,17 @@ public interface IDeadLetterReplayStore
     /// headers, and correlation id, resets the attempt count to zero, clears the failure context,
     /// and stamps a <see cref="RedrivenFromHeader"/> header with the source id.
     /// </summary>
-    /// <param name="messageId">Dead-letter id (the originating outbox row id) to redrive.</param>
+    /// <param name="messageId">
+    /// The id of the dead-letter record to redrive. This is the
+    /// <see cref="DeadLetteredMessage.Id"/> of the terminal record (which is, by construction, the
+    /// id of the originating <see cref="OutboxRow"/> the message was dead-lettered from, since the
+    /// dead-letter store keys its records on the source outbox row id). It is NOT a fresh
+    /// dead-letter-only surrogate: callers pass the same value they read from
+    /// <see cref="DeadLetteredMessage.Id"/> via <see cref="IDeadLetterStore.GetDeadLetteredAsync"/>.
+    /// Every implementation interprets this id identically - it is matched against the dead-letter
+    /// record's primary key, never against the live outbox - so the in-memory and relational stores
+    /// behave the same for the same id.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>
     /// <see langword="true"/> when this call re-enqueued the message; <see langword="false"/> when
