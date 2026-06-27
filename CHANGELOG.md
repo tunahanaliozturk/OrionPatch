@@ -6,6 +6,28 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-27
+
+### Added
+
+#### Dead-letter replay / redrive API (`IDeadLetterReplayStore`)
+
+A dead-lettered message was a terminal record: `GetDeadLetteredAsync` could read it for triage, but there was no supported path to put a fixed message back into the active outbox. This release closes that loop with an operator-facing redrive API, implemented on both the in-memory testing storage and the production EF Core backend. Purely additive: existing public APIs and their behavior are unchanged, and a storage backend that does not implement the new interface simply exposes no redrive path.
+
+- New `IDeadLetterReplayStore` SPI in `Moongazing.OrionPatch.Abstractions`. A storage backend opts in by implementing it alongside `IDeadLetterStore`. Both the bundled `InMemoryOutboxStorage` (`Moongazing.OrionPatch.Testing`) and `EfCoreOutboxStorage` (`Moongazing.OrionPatch.EntityFrameworkCore`) now implement it.
+- `RedriveAsync(messageId, ct)` re-enqueues a single dead-lettered message into the active outbox as a fresh `Pending` row and removes it from the dead-letter store, atomically per message (the message is never both dead-lettered and live). The new row reuses the source id, resets the attempt count to zero, clears the failure context (`LastError`, `ProcessedAtUtc`, claim columns), preserves the original payload / headers / correlation id / occurrence time, stamps `EnqueuedAtUtc` with the redrive instant, and stamps a `redriven-from` header (`IDeadLetterReplayStore.RedrivenFromHeader`) carrying the source id for traceability. Idempotent on the dead-letter id: a double-click or retried call for an already-redriven or absent id is a clean no-op returning `false`.
+- `RedriveAsync(RedriveFilter, batchSize, ct)` bulk-redrives a filtered set in bounded batches and returns an aggregate `RedriveResult`. `RedriveFilter` narrows by logical `MessageType` and a half-open dead-letter window (`DeadLetteredAtOrAfterUtc` inclusive, `DeadLetteredBeforeUtc` exclusive); `RedriveFilter.All` redrives the whole store. Batched so a large backlog drains over several short transactions rather than one long lock, and resumable: a cancelled run leaves already-moved messages re-enqueued and the rest dead-lettered. On EF Core, the filter is pushed to the database as a server-side `WHERE`; each batch runs in one transaction.
+- New `RedriveResult` (`readonly record struct(int Redriven, int Skipped)`) reports how many messages were re-enqueued and how many were skipped as an idempotent no-op, with a `Total`, an `Empty` identity, and a component-wise `+` operator so a bulk redrive folds per-batch outcomes into one total.
+- New `orionpatch.outbox.dead_letter.redriven` counter (`Counter<long>`) and `OrionPatchDiagnostics.RecordRedriven(long)` helper, consistent with the existing dispatcher diagnostics. Counts re-enqueued messages only; non-positive inputs (no-op skips) are ignored so a redrive that moved nothing emits no zero sample. Operators graph the rate against the `orionpatch.outbox.deadlettered` counter to watch a backlog drain after a downstream outage is resolved.
+- `OrionPatch.Testing` scenario helper `OutboxAssertions.AssertRedriven(...)` asserts a row was re-enqueued (pending, attempt count zero, carrying the `redriven-from` header) so the redrive path is covered like the dispatch path.
+- No schema change: redrive reuses the existing `OrionPatch_Outbox` and `OrionPatch_DeadLetter` tables (delete the dead-letter row, insert a fresh outbox row), so no new migration is required beyond the v0.3.2 dead-letter table.
+
+### Tests
+
+- `InMemoryDeadLetterReplayStoreTests`: redrive by id re-enqueues as a fresh pending row and removes from the dead-letter store; preserves payload / correlation id / occurrence time and stamps `redriven-from` while keeping pre-existing headers; idempotent on re-run; a clean no-op for an absent id; a redriven row is dispatchable again through the `DeterministicDispatcher`; bulk redrive of a filtered type in batches returns correct counts and leaves non-matching messages dead-lettered; bulk redrive of all drains the store; window filtering; empty result when the filter matches nothing; rejects a non-positive batch size; `AssertRedriven` finds the re-enqueued row.
+- `EfCoreDeadLetterReplayStoreTests` (SQLite, the repo's existing EF Core test approach): the same scenarios against the relational backend plus cross-context idempotency on a shared connection and a redriven row being claimable again.
+- `RedrivenCounterTests`, `RedriveResultTests`, `RedriveFilterTests` cover the metric helper, the result arithmetic, and the filter predicate (ordinal type match, half-open window, AND-combined facets).
+
 ## [0.3.2] - 2026-06-22
 
 ### Added

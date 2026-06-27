@@ -16,9 +16,9 @@ If an item here matters to you, open a GitHub issue so we can weigh it against e
 
 ## Released
 
-Current version: **0.3.1**. A transactional outbox primitive plus an idempotent inbox, three
-broker sinks (Kafka, RabbitMQ, Azure Service Bus), a durable dead-letter store, retention-based
-archival, and an OpenTelemetry surface. The full per-version history is in the
+Current version: **0.3.3**. A transactional outbox primitive plus an idempotent inbox, three
+broker sinks (Kafka, RabbitMQ, Azure Service Bus), a durable dead-letter store with replay /
+redrive, retention-based archival, and an OpenTelemetry surface. The full per-version history is in the
 [CHANGELOG](CHANGELOG.md); the highlights below are the items worth knowing about at a glance.
 
 - **v0.1.0** (2026-05-24) - Initial public release. `IOutbox` + `IOutboxSink` + EF Core storage + retry / in-place dead-letter / OpenTelemetry / in-process channel sink. Three NuGet packages: `OrionPatch`, `OrionPatch.EntityFrameworkCore`, `OrionPatch.Testing`.
@@ -34,6 +34,8 @@ archival, and an OpenTelemetry surface. The full per-version history is in the
 - **v0.2.22** (2026-06-11) - Fix: pack and publish the three sibling sink packages (`Kafka`, `RabbitMQ`, `AzureServiceBus`), which the release workflow had been omitting.
 - **v0.3.0** (2026-06-19) - Outbox dead-letter **store** (`IDeadLetterStore`) and outbox **archival** (`IOutboxArchivalStore`). See the dedicated section below.
 - **v0.3.1** (2026-06-20) - The Kafka inbound diagnostics `Meter` version now derives from the owning assembly's `AssemblyInformationalVersionAttribute` at runtime instead of a hardcoded string, so the metric version tracks the package version and no longer drifts on release.
+- **v0.3.2** (2026-06-22) - Dead-letter store and archival brought to the production EF Core backend (`EfCoreOutboxStorage : IDeadLetterStore, IOutboxArchivalStore`); new `OrionPatch_DeadLetter` and `OrionPatch_OutboxArchive` tables.
+- **v0.3.3** (2026-06-27) - Dead-letter replay / redrive API (`IDeadLetterReplayStore`) on both the in-memory and EF Core stores. See the dedicated section below.
 
 ---
 
@@ -131,23 +133,30 @@ their own storage.
 
 ---
 
-## v0.3.3 - Dead-letter replay and operator tooling *(planned, Q3 2026)*
+## v0.3.3 - Dead-letter replay and redrive *(shipped 2026-06-27)*
 
-A dead-lettered message is currently a terminal record: `GetDeadLetteredAsync` can read it, but
-there is no supported path to put a fixed message back into the active outbox. This release
-closes that loop, which is the most-requested operation once a dead-letter store exists.
+A dead-lettered message used to be a terminal record: `GetDeadLetteredAsync` could read it, but
+there was no supported path to put a fixed message back into the active outbox. This release
+closes that loop - the most-requested operation once a dead-letter store exists - on both the
+in-memory testing store and the production EF Core backend. The capability is an optional SPI
+(`IDeadLetterReplayStore`) a storage type opts into; backends that do not implement it keep the
+prior behaviour, so it is backward compatible.
 
-- **Replay / redrive API** - `IDeadLetterStore.RedriveAsync(messageId, ...)` re-enqueues a
-  dead-lettered message as a fresh `Pending` outbox row (new row id, attempt count reset,
-  original payload / headers / correlation id preserved, a `redriven-from` header stamped for
-  traceability) and removes it from the dead-letter store in one transaction. Idempotent on the
-  dead-letter id so a double-click or retried call does not enqueue twice.
-- **Bulk redrive** - redrive-by-predicate (message type, dead-letter window) for recovering a
-  whole class of failures after a downstream outage is resolved, batched and resumable.
-- **Replay metrics** - `orionpatch.outbox.dead_letter.redriven` counter and a dead-letter
-  depth gauge so operators can see the backlog drain.
-- **Tooling** - a minimal CLI / `IHostedService` maintenance surface plus `OrionPatch.Testing`
-  scenario helpers (`AssertRedriven`) so the redrive path is covered like the dispatch path.
+- **Replay / redrive API** - `IDeadLetterReplayStore.RedriveAsync(messageId, ...)` re-enqueues a
+  dead-lettered message as a fresh `Pending` outbox row (attempt count reset, failure context
+  cleared, original payload / headers / correlation id preserved, a `redriven-from` header stamped
+  for traceability) and removes it from the dead-letter store atomically per message, so a message
+  is never both dead-lettered and live. Idempotent on the dead-letter id so a double-click or
+  retried call does not enqueue twice (a clean `false` no-op).
+- **Bulk redrive** - `RedriveAsync(RedriveFilter, batchSize, ...)` redrive-by-filter (message type,
+  half-open dead-letter window) for recovering a whole class of failures after a downstream outage
+  is resolved, in bounded batches and resumable, returning a `RedriveResult` (redriven + skipped
+  counts).
+- **Replay metrics** - `orionpatch.outbox.dead_letter.redriven` counter (`RecordRedriven`) so
+  operators can graph the backlog draining against the existing `deadlettered` counter.
+- **Testing helper** - `OrionPatch.Testing` scenario helper `AssertRedriven` so the redrive path is
+  covered like the dispatch path. (A CLI / `IHostedService` maintenance surface and the
+  `OrionPatch.Dashboard` one-click redrive UI remain on the v0.4.1 operator-surface milestone.)
 
 ---
 
@@ -200,8 +209,8 @@ inside the 1.x line. Anything obsolete by then is removed; everything that remai
 stable.
 
 - **API stability** - `IOutbox`, `IOutboxSink`, `IOutboxStorage`, `IDeadLetterStore`,
-  `IOutboxArchivalStore`, `OutboxEnvelope`, `OrionPatchOptions`, and every shipped sink and
-  storage backend freeze. Additions only.
+  `IDeadLetterReplayStore`, `IOutboxArchivalStore`, `OutboxEnvelope`, `OrionPatchOptions`, and
+  every shipped sink and storage backend freeze. Additions only.
 - **Documentation pass** - every public type has a runnable example. At-least-once
   pitfalls documented exhaustively. Migration guide from any breaking change introduced
   in 0.x.

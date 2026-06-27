@@ -1,10 +1,12 @@
 namespace Moongazing.OrionPatch.EntityFrameworkCore;
 
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Moongazing.OrionPatch.Abstractions;
 using Moongazing.OrionPatch.EntityFrameworkCore.Claims;
 using Moongazing.OrionPatch.Models;
+using Moongazing.OrionPatch.Telemetry;
 
 /// <summary>
 /// EF Core-backed <see cref="IOutboxStorage"/>. Claim semantics are delegated to a
@@ -37,12 +39,20 @@ using Moongazing.OrionPatch.Models;
 /// out of the active outbox in bounded batches so a large backlog never takes one long lock.
 /// </para>
 /// <para>
+/// v0.3.3: this type also implements <see cref="IDeadLetterReplayStore"/>, the operator-facing
+/// redrive path. A redrive deletes the <see cref="DeadLetterRow"/> and inserts a fresh pending
+/// <see cref="Models.OutboxRow"/> (new attempt count, cleared failure context, original payload /
+/// headers / correlation id preserved, a <see cref="IDeadLetterReplayStore.RedrivenFromHeader"/>
+/// header stamped) inside one explicit transaction, so the message is never both dead-lettered and
+/// live, and is idempotent on the dead-letter id.
+/// </para>
+/// <para>
 /// This type does not emit telemetry. <see cref="Hosting.OutboxDispatcherHostedService"/>
 /// instruments <see cref="Abstractions.IOutboxStorage"/> calls externally; storage stays
 /// transparent to keep the per-operation cost predictable and to avoid double-counting.
 /// </para>
 /// </remarks>
-public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOutboxArchivalStore
+public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOutboxArchivalStore, IDeadLetterReplayStore
 {
     /// <summary>
     /// Default number of rows moved out of the active outbox per archival batch. Bounds the
@@ -507,5 +517,219 @@ public sealed class EfCoreOutboxStorage : IOutboxStorage, IDeadLetterStore, IOut
             .ToListAsync(cancellationToken).ConfigureAwait(false);
 
         return rows.Select(static a => a.ToRow()).ToList();
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Runs the <see cref="DeadLetterRow"/> delete and the fresh <see cref="OutboxRow"/> insert
+    /// inside one explicit transaction so the move is atomic: a crash between the two never leaves
+    /// the message in both tables or neither. Idempotency is anchored on the dead-letter id: a
+    /// replayed call finds the dead-letter row already gone (the pre-read) and is a no-op. When the
+    /// caller already owns an ambient transaction this joins it rather than nesting.
+    /// </remarks>
+    public async Task<bool> RedriveAsync(Guid messageId, CancellationToken cancellationToken = default)
+    {
+        var ownsTransaction = db.Database.CurrentTransaction is null;
+        IDbContextTransaction? transaction = ownsTransaction
+            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        try
+        {
+            var moved = await RedriveOneCoreAsync(messageId, cancellationToken).ConfigureAwait(false);
+
+            if (ownsTransaction && transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (moved)
+            {
+                OrionPatchDiagnostics.RecordRedriven(1);
+            }
+
+            return moved;
+        }
+        finally
+        {
+            if (transaction is not null)
+            {
+                await transaction.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Pages the matching dead-letter ids newest-first and redrives them in batches of
+    /// <paramref name="batchSize"/>, each batch a single transaction so individual moves stay
+    /// atomic and a large backlog drains over several short locks. The loop re-queries each batch by
+    /// id from the live table, so a message redriven or removed by a concurrent caller between
+    /// shortlisting and the move is counted as skipped rather than re-enqueued twice. Resumable:
+    /// a cancelled run leaves already-moved messages re-enqueued and the rest dead-lettered.
+    /// </remarks>
+    public async Task<RedriveResult> RedriveAsync(RedriveFilter filter, int batchSize, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+
+        var result = RedriveResult.Empty;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var batchIds = await FilteredDeadLetterQuery(filter)
+                .OrderByDescending(d => d.DeadLetteredAtUtc)
+                .ThenBy(d => d.Id)
+                .Select(d => d.Id)
+                .Take(batchSize)
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
+
+            if (batchIds.Count == 0)
+            {
+                break;
+            }
+
+            var ownsTransaction = db.Database.CurrentTransaction is null;
+            IDbContextTransaction? transaction = ownsTransaction
+                ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+                : null;
+            var redriven = 0;
+            var skipped = 0;
+            try
+            {
+                foreach (var id in batchIds)
+                {
+                    if (await RedriveOneCoreAsync(id, cancellationToken).ConfigureAwait(false))
+                    {
+                        redriven++;
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                }
+
+                if (ownsTransaction && transaction is not null)
+                {
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                if (transaction is not null)
+                {
+                    await transaction.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+
+            OrionPatchDiagnostics.RecordRedriven(redriven);
+            result += new RedriveResult(redriven, skipped);
+
+            // A short batch means the candidate set is exhausted; skipped ids (concurrently removed)
+            // are not re-shortlisted because the next query reads the live table. Guard against a
+            // pathological all-skip batch (every shortlisted id vanished) looping forever by
+            // stopping when nothing actually moved out of a full-size batch.
+            if (batchIds.Count < batchSize || redriven == 0)
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Move one dead-lettered message into the active outbox: read the <see cref="DeadLetterRow"/>,
+    /// insert a fresh pending <see cref="OutboxRow"/> (reset attempt count, cleared failure context,
+    /// stamped <see cref="IDeadLetterReplayStore.RedrivenFromHeader"/> header), and delete the
+    /// dead-letter row. Assumes the caller has opened the enclosing transaction. Returns
+    /// <see langword="false"/> as the idempotent no-op when the dead-letter row is already gone.
+    /// </summary>
+    private async Task<bool> RedriveOneCoreAsync(Guid messageId, CancellationToken cancellationToken)
+    {
+        var dead = await db.Set<DeadLetterRow>()
+            .AsNoTracking()
+            .Where(d => d.Id == messageId)
+            .Select(d => new
+            {
+                d.MessageType,
+                d.Payload,
+                d.HeadersJson,
+                d.CorrelationId,
+                d.OccurredAtUtc,
+            })
+            .FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+        if (dead is null)
+        {
+            // Already redriven or never present: idempotent no-op.
+            return false;
+        }
+
+        // Clear any tracked entity carrying this id before adding the fresh row. The storage never
+        // tracks OutboxRow itself (every read is AsNoTracking), but the redrive reuses the source
+        // row id as the new row id, and a consumer that tracked the original row on this shared
+        // DbContext would otherwise collide on the identity map. Clearing keeps the add safe.
+        db.ChangeTracker.Clear();
+
+        var now = DateTime.UtcNow;
+        db.Add(new OutboxRow
+        {
+            Id = messageId,
+            MessageType = dead.MessageType,
+            Payload = dead.Payload,
+            HeadersJson = StampRedrivenFrom(dead.HeadersJson, messageId),
+            CorrelationId = dead.CorrelationId,
+            OccurredAtUtc = dead.OccurredAtUtc,
+            EnqueuedAtUtc = now,
+            Status = OutboxStatus.Pending,
+            AttemptCount = 0,
+            NextAttemptAtUtc = now,
+        });
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        db.ChangeTracker.Clear();
+
+        await db.Set<DeadLetterRow>()
+            .Where(d => d.Id == messageId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+
+        return true;
+    }
+
+    /// <summary>Apply a <see cref="RedriveFilter"/> as a server-side <c>WHERE</c> over the dead-letter table.</summary>
+    private IQueryable<DeadLetterRow> FilteredDeadLetterQuery(RedriveFilter filter)
+    {
+        var query = db.Set<DeadLetterRow>().AsNoTracking();
+
+        if (filter.MessageType is { } messageType)
+        {
+            query = query.Where(d => d.MessageType == messageType);
+        }
+
+        if (filter.DeadLetteredAtOrAfterUtc is { } from)
+        {
+            query = query.Where(d => d.DeadLetteredAtUtc >= from);
+        }
+
+        if (filter.DeadLetteredBeforeUtc is { } to)
+        {
+            query = query.Where(d => d.DeadLetteredAtUtc < to);
+        }
+
+        return query;
+    }
+
+    /// <summary>
+    /// Merge the <see cref="IDeadLetterReplayStore.RedrivenFromHeader"/> header (value = the source
+    /// dead-letter id in Guid "N" format) into the message's JSON-serialized header map, preserving
+    /// existing headers. A header of the same key is overwritten so the stamp is authoritative.
+    /// </summary>
+    private static string StampRedrivenFrom(string? headersJson, Guid sourceId)
+    {
+        var headers = string.IsNullOrEmpty(headersJson)
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : JsonSerializer.Deserialize<Dictionary<string, string>>(headersJson) ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+        headers[IDeadLetterReplayStore.RedrivenFromHeader] = sourceId.ToString("N");
+        return JsonSerializer.Serialize(headers);
     }
 }
