@@ -42,6 +42,9 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
     /// as <see cref="IDeadLetterStore"/> and <see cref="IOutboxArchivalStore"/>, so the dispatcher
     /// routes exhausted rows into the durable dead-letter table and an operator-invoked job can
     /// resolve <see cref="IOutboxArchivalStore"/> to reap processed rows past the retention window.</item>
+    /// <item>From v0.3.3, the same scoped instance is also exposed as
+    /// <see cref="IDeadLetterReplayStore"/>, so an operator-facing redrive job can resolve it to
+    /// re-enqueue dead-lettered messages back into the active outbox.</item>
     /// </list>
     /// </para>
     /// <para>
@@ -100,6 +103,7 @@ public static class OrionPatchEntityFrameworkCoreBuilderExtensions
         builder.Services.AddScoped<IOutboxStorage>(sp => sp.GetRequiredService<EfCoreOutboxStorage>());
         builder.Services.AddScoped<IDeadLetterStore>(sp => sp.GetRequiredService<EfCoreOutboxStorage>());
         builder.Services.AddScoped<IOutboxArchivalStore>(sp => sp.GetRequiredService<EfCoreOutboxStorage>());
+        builder.Services.AddScoped<IDeadLetterReplayStore>(sp => sp.GetRequiredService<EfCoreOutboxStorage>());
 
         return builder;
     }

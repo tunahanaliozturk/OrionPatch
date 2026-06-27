@@ -21,17 +21,30 @@ public static class OrionPatchTestingBuilderExtensions
     /// <param name="builder">Builder returned from <c>AddOrionPatch</c>; must be non-null.</param>
     /// <returns>The same <paramref name="builder"/> for fluent chaining.</returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> is null.</exception>
+    /// <remarks>
+    /// The one <see cref="InMemoryOutboxStorage"/> singleton is also exposed as
+    /// <see cref="IDeadLetterStore"/>, <see cref="IOutboxArchivalStore"/>, and
+    /// <see cref="IDeadLetterReplayStore"/>, mirroring the EF Core registration so a test host can
+    /// resolve the dead-letter, archival, and redrive capabilities against the same in-memory store
+    /// that backs <see cref="IOutboxStorage"/>.
+    /// </remarks>
     public static OrionPatchBuilder UseInMemory(this OrionPatchBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
         builder.Services.RemoveAll<IOutbox>();
         builder.Services.RemoveAll<IOutboxStorage>();
+        builder.Services.RemoveAll<IDeadLetterStore>();
+        builder.Services.RemoveAll<IOutboxArchivalStore>();
+        builder.Services.RemoveAll<IDeadLetterReplayStore>();
         builder.Services.RemoveAll<InMemoryOutboxStorage>();
         builder.Services.RemoveAll<InMemoryOutbox>();
 
         builder.Services.AddSingleton<InMemoryOutboxStorage>();
         builder.Services.AddSingleton<IOutboxStorage>(sp => sp.GetRequiredService<InMemoryOutboxStorage>());
+        builder.Services.AddSingleton<IDeadLetterStore>(sp => sp.GetRequiredService<InMemoryOutboxStorage>());
+        builder.Services.AddSingleton<IOutboxArchivalStore>(sp => sp.GetRequiredService<InMemoryOutboxStorage>());
+        builder.Services.AddSingleton<IDeadLetterReplayStore>(sp => sp.GetRequiredService<InMemoryOutboxStorage>());
 
         builder.Services.AddSingleton(sp => new InMemoryOutbox(sp.GetRequiredService<InMemoryOutboxStorage>()));
         builder.Services.AddSingleton<IOutbox>(sp => sp.GetRequiredService<InMemoryOutbox>());

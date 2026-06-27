@@ -1,8 +1,10 @@
 namespace Moongazing.OrionPatch.Testing;
 
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Moongazing.OrionPatch.Abstractions;
 using Moongazing.OrionPatch.Models;
+using Moongazing.OrionPatch.Telemetry;
 
 /// <summary>
 /// Thread-safe in-memory <see cref="IOutboxStorage"/> for use in tests.
@@ -17,8 +19,10 @@ using Moongazing.OrionPatch.Models;
 /// v0.3.0: also implements <see cref="IDeadLetterStore"/> (route exhausted rows out of the hot
 /// outbox into a dedicated dead-letter store exactly once) and <see cref="IOutboxArchivalStore"/>
 /// (reap processed rows past the retention window, either archiving or purging them).
+/// v0.3.3: also implements <see cref="IDeadLetterReplayStore"/> (re-enqueue a dead-lettered
+/// message back into the active outbox as a fresh pending row, atomically, idempotently).
 /// </remarks>
-public sealed class InMemoryOutboxStorage : IOutboxStorage, IDeadLetterStore, IOutboxArchivalStore
+public sealed class InMemoryOutboxStorage : IOutboxStorage, IDeadLetterStore, IOutboxArchivalStore, IDeadLetterReplayStore
 {
     private readonly object syncRoot = new();
     private readonly ConcurrentDictionary<Guid, OutboxRow> rows = new();
@@ -288,5 +292,124 @@ public sealed class InMemoryOutboxStorage : IOutboxStorage, IDeadLetterStore, IO
         {
             return Task.FromResult<IReadOnlyList<OutboxRow>>(archived.ToList());
         }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The move (remove the dead-letter record, append a fresh pending row) is performed under the
+    /// per-instance lock so it is atomic: the message is never simultaneously dead-lettered and
+    /// live. Idempotency is anchored on the dead-letter id: a second call for a message already
+    /// redriven (or never present) finds nothing to remove and is a no-op.
+    /// </remarks>
+    public Task<bool> RedriveAsync(Guid messageId, CancellationToken cancellationToken = default)
+    {
+        lock (syncRoot)
+        {
+            if (!deadLettered.TryRemove(messageId, out var message))
+            {
+                return Task.FromResult(false);
+            }
+
+            rows[message.Id] = ToPendingRow(message);
+            OrionPatchDiagnostics.RecordRedriven(1);
+            return Task.FromResult(true);
+        }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Snapshots the matching dead-letter ids under the lock, then redrives them in batches of
+    /// <paramref name="batchSize"/>, each batch taken under the lock so individual moves stay
+    /// atomic. A message that is concurrently redriven or removed between the snapshot and its
+    /// batch is counted as skipped, not re-enqueued twice.
+    /// </remarks>
+    public Task<RedriveResult> RedriveAsync(RedriveFilter filter, int batchSize, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+
+        List<Guid> candidates;
+        lock (syncRoot)
+        {
+            candidates = deadLettered.Values
+                .Where(filter.Matches)
+                .Select(m => m.Id)
+                .ToList();
+        }
+
+        var result = RedriveResult.Empty;
+        for (var i = 0; i < candidates.Count; i += batchSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var redriven = 0;
+            var skipped = 0;
+            lock (syncRoot)
+            {
+                var end = Math.Min(i + batchSize, candidates.Count);
+                for (var j = i; j < end; j++)
+                {
+                    if (deadLettered.TryRemove(candidates[j], out var message))
+                    {
+                        rows[message.Id] = ToPendingRow(message);
+                        redriven++;
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                }
+            }
+
+            OrionPatchDiagnostics.RecordRedriven(redriven);
+            result += new RedriveResult(redriven, skipped);
+        }
+
+        return Task.FromResult(result);
+    }
+
+    /// <summary>
+    /// Build the fresh pending outbox row a redrive re-enqueues from a dead-lettered message:
+    /// original payload / correlation id / occurrence time preserved, attempt count reset to zero,
+    /// failure context cleared, and a <see cref="IDeadLetterReplayStore.RedrivenFromHeader"/> header
+    /// stamped with the source id. <see cref="OutboxRow.EnqueuedAtUtc"/> is the redrive instant so
+    /// FIFO claim ordering and pickup-lag telemetry treat it as a newly enqueued row.
+    /// </summary>
+    private static OutboxRow ToPendingRow(DeadLetteredMessage message)
+    {
+        var headersJson = StampRedrivenFrom(message.HeadersJson, message.Id);
+        var now = DateTime.UtcNow;
+        return new OutboxRow
+        {
+            Id = message.Id,
+            MessageType = message.MessageType,
+            Payload = message.Payload,
+            HeadersJson = headersJson,
+            CorrelationId = message.CorrelationId,
+            OccurredAtUtc = message.OccurredAtUtc,
+            EnqueuedAtUtc = now,
+            Status = OutboxStatus.Pending,
+            AttemptCount = 0,
+            ClaimedAtUtc = null,
+            ClaimedBy = null,
+            LastError = null,
+            ProcessedAtUtc = null,
+            NextAttemptAtUtc = now,
+        };
+    }
+
+    /// <summary>
+    /// Merge the <see cref="IDeadLetterReplayStore.RedrivenFromHeader"/> header (value = the source
+    /// dead-letter id in Guid "N" format) into the message's JSON-serialized header map, preserving
+    /// any existing headers. A caller-supplied header of the same key is overwritten so the stamp is
+    /// authoritative.
+    /// </summary>
+    private static string StampRedrivenFrom(string? headersJson, Guid sourceId)
+    {
+        var headers = string.IsNullOrEmpty(headersJson)
+            ? new Dictionary<string, string>(StringComparer.Ordinal)
+            : JsonSerializer.Deserialize<Dictionary<string, string>>(headersJson) ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+        headers[IDeadLetterReplayStore.RedrivenFromHeader] = sourceId.ToString("N");
+        return JsonSerializer.Serialize(headers);
     }
 }

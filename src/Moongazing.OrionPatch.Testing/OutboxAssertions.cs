@@ -1,6 +1,7 @@
 namespace Moongazing.OrionPatch.Testing;
 
 using System.Text.Json;
+using Moongazing.OrionPatch.Abstractions;
 using Moongazing.OrionPatch.Models;
 
 /// <summary>
@@ -93,5 +94,54 @@ public static class OutboxAssertions
         }
 
         throw new InvalidOperationException("No dead-lettered row matched the predicate.");
+    }
+
+    /// <summary>
+    /// Assert that <paramref name="storage"/> holds a row redriven from the dead-letter store: a
+    /// <see cref="OutboxStatus.Pending"/> row, attempt count reset to zero, carrying the
+    /// <see cref="IDeadLetterReplayStore.RedrivenFromHeader"/> header, and (optionally) matching the
+    /// supplied predicate. Returns the matched row so the caller can chain further assertions.
+    /// </summary>
+    /// <param name="storage">The in-memory storage to scan; must be non-null.</param>
+    /// <param name="predicate">Optional predicate evaluated against the redriven row.</param>
+    /// <returns>The first redriven row that matches the predicate (or any redriven row when no predicate is supplied).</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="storage"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when no matching redriven row was found.</exception>
+    public static OutboxRow AssertRedriven(
+        this InMemoryOutboxStorage storage,
+        Func<OutboxRow, bool>? predicate = null)
+    {
+        ArgumentNullException.ThrowIfNull(storage);
+
+        foreach (var row in storage.Rows)
+        {
+            if (row.Status != OutboxStatus.Pending || row.AttemptCount != 0)
+            {
+                continue;
+            }
+
+            if (!HasRedrivenFromHeader(row))
+            {
+                continue;
+            }
+
+            if (predicate is null || predicate(row))
+            {
+                return row;
+            }
+        }
+
+        throw new InvalidOperationException("No redriven row matched the predicate.");
+    }
+
+    private static bool HasRedrivenFromHeader(OutboxRow row)
+    {
+        if (string.IsNullOrEmpty(row.HeadersJson))
+        {
+            return false;
+        }
+
+        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(row.HeadersJson);
+        return headers is not null && headers.ContainsKey(IDeadLetterReplayStore.RedrivenFromHeader);
     }
 }

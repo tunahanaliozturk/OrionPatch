@@ -34,6 +34,31 @@ public static class OrionPatchDiagnostics
     /// <summary>Count of total dispatch attempts (successes + failures combined).</summary>
     public static readonly Counter<long> Attempts = Meter.CreateCounter<long>("orionpatch.outbox.attempts");
 
+    /// <summary>
+    /// v0.3.3 count of dead-lettered messages re-enqueued into the active outbox via the redrive
+    /// (replay) API (<see cref="Abstractions.IDeadLetterReplayStore"/>). Operators graph the rate
+    /// against the v0.1.0 <see cref="DeadLettered"/> counter to watch a dead-letter backlog drain
+    /// after a downstream outage is resolved. Counts re-enqueued messages only; the idempotent
+    /// no-op skips (already redriven, absent) are not counted here.
+    /// </summary>
+    public static readonly Counter<long> Redriven =
+        Meter.CreateCounter<long>("orionpatch.outbox.dead_letter.redriven", unit: "{messages}");
+
+    /// <summary>
+    /// Record <paramref name="count"/> redriven messages. Non-positive inputs are ignored so a
+    /// no-op bulk redrive (filter matched nothing, or every match was already redriven) does not
+    /// emit a zero sample. Public for consumer-owned redrive tooling.
+    /// </summary>
+    /// <param name="count">Number of messages re-enqueued in this redrive call.</param>
+    public static void RecordRedriven(long count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+        Redriven.Add(count);
+    }
+
     /// <summary>Per-envelope sink dispatch duration in milliseconds.</summary>
     public static readonly Histogram<double> DispatchDuration =
         Meter.CreateHistogram<double>("orionpatch.outbox.dispatch.duration", unit: "ms");
