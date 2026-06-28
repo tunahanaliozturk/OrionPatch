@@ -21,16 +21,24 @@ internal static class NativeClaimConcurrency
     /// <param name="rowCount">Number of due rows to seed.</param>
     /// <param name="claimerCount">Number of concurrent dispatchers.</param>
     /// <param name="batchSize">Per-claim batch size.</param>
+    /// <param name="timeout">Hard deadline on the whole race; defaults to two minutes. Bounds the test so a contention bug fails loudly instead of hanging.</param>
     public static async Task AssertExclusiveClaimAsync(
         Func<NativeClaimDbContext> newContext,
         int rowCount = 200,
         int claimerCount = 8,
-        int batchSize = 7)
+        int batchSize = 7,
+        TimeSpan? timeout = null)
     {
+        // A correctness bug (e.g. two claimers blocking on the same row instead of skipping) could
+        // otherwise wedge the whole test run. Bound the race with a hard deadline so it fails loudly
+        // instead of hanging.
+        using var cts = new CancellationTokenSource(timeout ?? TimeSpan.FromMinutes(2));
+        var cancellationToken = cts.Token;
+
         // Clean slate, then seed `rowCount` due pending rows.
         await using (var seed = newContext())
         {
-            await seed.Set<OutboxRow>().ExecuteDeleteAsync();
+            await seed.Set<OutboxRow>().ExecuteDeleteAsync(cancellationToken);
             var now = DateTime.UtcNow;
             for (var i = 0; i < rowCount; i++)
             {
@@ -44,7 +52,7 @@ internal static class NativeClaimConcurrency
                     Status = OutboxStatus.Pending,
                 });
             }
-            await seed.SaveChangesAsync();
+            await seed.SaveChangesAsync(cancellationToken);
         }
 
         // All claimers block on this gate, then fire simultaneously (a deterministic start barrier,
@@ -55,12 +63,13 @@ internal static class NativeClaimConcurrency
 
         async Task RunClaimerAsync(int claimerId)
         {
-            await gate.Task;
+            await gate.Task.WaitAsync(cancellationToken);
             await using var db = newContext();
             var storage = new EfCoreOutboxStorage(db);
             while (true)
             {
-                var batch = await storage.ClaimNextAsync(batchSize, $"dispatcher-{claimerId}", TimeSpan.FromMinutes(5));
+                cancellationToken.ThrowIfCancellationRequested();
+                var batch = await storage.ClaimNextAsync(batchSize, $"dispatcher-{claimerId}", TimeSpan.FromMinutes(5), cancellationToken);
                 if (batch.Count == 0)
                 {
                     break;
@@ -77,7 +86,7 @@ internal static class NativeClaimConcurrency
 
         var workers = Enumerable.Range(0, claimerCount).Select(RunClaimerAsync).ToArray();
         gate.SetResult();
-        await Task.WhenAll(workers);
+        await Task.WhenAll(workers).WaitAsync(cancellationToken);
 
         // Every seeded row claimed exactly once, and the total equals the seed (no row lost, none
         // double-counted). The dictionary holds one entry per distinct id; -1 marks a contested id.
@@ -87,7 +96,7 @@ internal static class NativeClaimConcurrency
 
         // Confirm the persisted state agrees: all rows Claimed, each by exactly one dispatcher.
         await using var verify = newContext();
-        var rows = await verify.Set<OutboxRow>().AsNoTracking().ToListAsync();
+        var rows = await verify.Set<OutboxRow>().AsNoTracking().ToListAsync(cancellationToken);
         Assert.Equal(rowCount, rows.Count);
         Assert.All(rows, r =>
         {

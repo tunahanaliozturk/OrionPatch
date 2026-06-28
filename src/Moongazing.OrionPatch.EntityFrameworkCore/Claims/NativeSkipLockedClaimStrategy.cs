@@ -30,7 +30,9 @@ using Moongazing.OrionPatch.Models;
 /// the <c>RETURNING</c> / <c>OUTPUT</c> result set can be projected straight into
 /// <see cref="OutboxRow"/> without EF Core change tracking. When the caller already holds an ambient
 /// <see cref="IDbContextTransaction"/> the command enlists in it; otherwise (MySQL only) a private
-/// transaction is opened and committed around the three statements.
+/// transaction is opened and committed around the three statements. If the bound connection was not
+/// already open this strategy opens it and closes it again before returning, so a claim issued
+/// outside an active unit of work does not leak an open pooled connection.
 /// </para>
 /// </remarks>
 /// <param name="dialect">SQL dialect this strategy targets.</param>
@@ -54,28 +56,45 @@ internal sealed class NativeSkipLockedClaimStrategy(SqlDialect dialect) : IClaim
         ArgumentNullException.ThrowIfNull(db);
         ArgumentException.ThrowIfNullOrEmpty(dispatcherIdentity);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(batchSize);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(leaseDuration.Ticks, nameof(leaseDuration));
 
         var leaseExpiry = utcNow - leaseDuration;
 
         // EF Core opens/owns the connection; reuse it so the claim runs on the same connection (and,
-        // when present, the same ambient transaction) as the rest of the unit of work.
+        // when present, the same ambient transaction) as the rest of the unit of work. If we have to
+        // open it ourselves, we must close it ourselves once done - leaving it open would leak a
+        // pooled connection for every claim. When it was already open (someone else owns its
+        // lifetime) we leave it exactly as we found it.
         var connection = db.Database.GetDbConnection();
         var ambient = db.Database.CurrentTransaction;
-        if (connection.State != ConnectionState.Open)
+        var openedByUs = connection.State != ConnectionState.Open;
+        if (openedByUs)
         {
             await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        return dialect switch
+        try
         {
-            SqlDialect.PostgreSql => await ClaimSingleStatementAsync(
-                connection, ambient, NativeClaimSql.PostgreSql, batchSize, dispatcherIdentity, utcNow, leaseExpiry, cancellationToken).ConfigureAwait(false),
-            SqlDialect.SqlServer => await ClaimSingleStatementAsync(
-                connection, ambient, NativeClaimSql.SqlServer, batchSize, dispatcherIdentity, utcNow, leaseExpiry, cancellationToken).ConfigureAwait(false),
-            SqlDialect.MySql => await ClaimMySqlAsync(
-                db, connection, ambient, batchSize, dispatcherIdentity, utcNow, leaseExpiry, cancellationToken).ConfigureAwait(false),
-            _ => throw new InvalidOperationException($"Unsupported dialect {dialect} for native claim."),
-        };
+            return dialect switch
+            {
+                SqlDialect.PostgreSql => await ClaimSingleStatementAsync(
+                    connection, ambient, NativeClaimSql.PostgreSql, batchSize, dispatcherIdentity, utcNow, leaseExpiry, cancellationToken).ConfigureAwait(false),
+                SqlDialect.SqlServer => await ClaimSingleStatementAsync(
+                    connection, ambient, NativeClaimSql.SqlServer, batchSize, dispatcherIdentity, utcNow, leaseExpiry, cancellationToken).ConfigureAwait(false),
+                SqlDialect.MySql => await ClaimMySqlAsync(
+                    db, connection, ambient, batchSize, dispatcherIdentity, utcNow, leaseExpiry, cancellationToken).ConfigureAwait(false),
+                _ => throw new InvalidOperationException($"Unsupported dialect {dialect} for native claim."),
+            };
+        }
+        finally
+        {
+            if (openedByUs)
+            {
+                // Balances our OpenConnectionAsync. Use EF's CloseConnectionAsync (not the raw
+                // DbConnection) so EF's open-reference count stays consistent.
+                await db.Database.CloseConnectionAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>

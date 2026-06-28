@@ -16,9 +16,10 @@ If an item here matters to you, open a GitHub issue so we can weigh it against e
 
 ## Released
 
-Current version: **0.3.3**. A transactional outbox primitive plus an idempotent inbox, three
+Current version: **0.4.0**. A transactional outbox primitive plus an idempotent inbox, three
 broker sinks (Kafka, RabbitMQ, Azure Service Bus), a durable dead-letter store with replay /
-redrive, retention-based archival, and an OpenTelemetry surface. The full per-version history is in the
+redrive, retention-based archival, a native provider `SKIP LOCKED` batch claim, and an
+OpenTelemetry surface. The full per-version history is in the
 [CHANGELOG](CHANGELOG.md); the highlights below are the items worth knowing about at a glance.
 
 - **v0.1.0** (2026-05-24) - Initial public release. `IOutbox` + `IOutboxSink` + EF Core storage + retry / in-place dead-letter / OpenTelemetry / in-process channel sink. Three NuGet packages: `OrionPatch`, `OrionPatch.EntityFrameworkCore`, `OrionPatch.Testing`.
@@ -36,6 +37,7 @@ redrive, retention-based archival, and an OpenTelemetry surface. The full per-ve
 - **v0.3.1** (2026-06-20) - The Kafka inbound diagnostics `Meter` version now derives from the owning assembly's `AssemblyInformationalVersionAttribute` at runtime instead of a hardcoded string, so the metric version tracks the package version and no longer drifts on release.
 - **v0.3.2** (2026-06-22) - Dead-letter store and archival brought to the production EF Core backend (`EfCoreOutboxStorage : IDeadLetterStore, IOutboxArchivalStore`); new `OrionPatch_DeadLetter` and `OrionPatch_OutboxArchive` tables.
 - **v0.3.3** (2026-06-27) - Dead-letter replay / redrive API (`IDeadLetterReplayStore`) on both the in-memory and EF Core stores. See the dedicated section below.
+- **v0.4.0** (2026-06-28) - Native provider `SKIP LOCKED` batch claim. `SkipLockedClaimStrategy` issues real lock-and-claim SQL per provider (`FOR UPDATE SKIP LOCKED` on PostgreSQL / MySQL, `WITH (UPDLOCK, READPAST, ROWLOCK, READCOMMITTEDLOCK)` on SQL Server - the `READCOMMITTEDLOCK` hint keeps `READPAST` skipping locked rows even under `READ_COMMITTED_SNAPSHOT`). SQLite and unrecognized providers keep the portable compare-and-swap fallback. See the dedicated section below.
 
 ---
 
@@ -170,12 +172,16 @@ non-additive surface) and tracked below.
 - **Native `SKIP LOCKED` claim** *(shipped 2026-06-28)* - `SkipLockedClaimStrategy` now issues the
   real provider SQL instead of delegating to the portable compare-and-swap fallback:
   `UPDATE ... WHERE Id IN (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING ...` on PostgreSQL, a CTE
-  with `WITH (UPDLOCK, READPAST, ROWLOCK)` + `OUTPUT inserted.*` on SQL Server, and a
-  `SELECT ... FOR UPDATE SKIP LOCKED` + `UPDATE` + re-select sequence inside one transaction on
-  MySQL / MariaDB. High-contention multi-dispatcher deployments no longer burn a no-op round-trip
-  per claim race loser; each due row is handed to exactly one of N replicas. SQLite and unrecognized
-  providers keep the portable compare-and-swap fallback. Verified by a competing-consumers
-  Testcontainers test (real PostgreSQL and SQL Server) asserting no row is ever double-claimed.
+  with `WITH (UPDLOCK, READPAST, ROWLOCK, READCOMMITTEDLOCK)` + `OUTPUT inserted.*` on SQL Server, and
+  a `SELECT ... FOR UPDATE SKIP LOCKED` + `UPDATE` + re-select sequence inside one transaction on
+  MySQL / MariaDB. On SQL Server the `READCOMMITTEDLOCK` hint is load-bearing: it forces the read to
+  be lock-based so `READPAST` genuinely skips locked rows even when the database has
+  `READ_COMMITTED_SNAPSHOT` ON (the Azure SQL default), where a plain `READPAST` would otherwise read
+  through row versions and let two dispatchers double-claim. High-contention multi-dispatcher
+  deployments no longer burn a no-op round-trip per claim race loser; each due row is handed to
+  exactly one of N replicas. SQLite and unrecognized providers keep the portable compare-and-swap
+  fallback. Verified by a competing-consumers Testcontainers test (real PostgreSQL, and SQL Server
+  with RCSI turned ON) asserting no row is ever double-claimed.
 
 ### Still planned
 

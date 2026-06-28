@@ -59,14 +59,28 @@ internal static class NativeClaimSql
 
     /// <summary>
     /// SQL Server 2008+. Single statement: a CTE locks the top eligible rows with
-    /// <c>UPDLOCK, READPAST, ROWLOCK</c> (acquire update locks, skip rows another dispatcher already
-    /// locked) in FIFO order, the <c>UPDATE</c> claims the CTE, and <c>OUTPUT inserted.*</c> returns
-    /// the claimed rows. Atomic in one round-trip.
+    /// <c>UPDLOCK, READPAST, ROWLOCK, READCOMMITTEDLOCK</c> (acquire update locks, skip rows another
+    /// dispatcher already locked) in FIFO order, the <c>UPDATE</c> claims the CTE, and
+    /// <c>OUTPUT inserted.*</c> returns the claimed rows. Atomic in one round-trip.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>RCSI correctness.</b> <c>READCOMMITTEDLOCK</c> is load-bearing, not redundant. When the
+    /// database has <c>READ_COMMITTED_SNAPSHOT</c> ON (the Azure SQL Database default, and common on
+    /// SQL Server) the default <c>READ COMMITTED</c> session reads through row versions and acquires no
+    /// row locks - so <c>READPAST</c> has no locks to skip and, per the SQL Server table-hint rules,
+    /// is in fact rejected in that combination. Two dispatchers reading the same committed version
+    /// would then both qualify the same row and contend on the update. <c>READCOMMITTEDLOCK</c> forces
+    /// this read to be lock-based regardless of the database's RCSI setting, so <c>UPDLOCK</c> takes a
+    /// real <c>U</c> lock per qualifying row and <c>READPAST</c> genuinely skips rows another
+    /// dispatcher has already locked. This makes the claim a correct competing-consumers queue read on
+    /// both RCSI and non-RCSI databases.
+    /// </para>
+    /// </remarks>
     internal const string SqlServer = """
         WITH eligible AS (
             SELECT TOP (@batchSize) *
-            FROM [OrionPatch_Outbox] WITH (UPDLOCK, READPAST, ROWLOCK)
+            FROM [OrionPatch_Outbox] WITH (UPDLOCK, READPAST, ROWLOCK, READCOMMITTEDLOCK)
             WHERE ([Status] = @pending AND ([NextAttemptAtUtc] IS NULL OR [NextAttemptAtUtc] <= @now))
                OR ([Status] = @claimedState AND [ClaimedAtUtc] IS NOT NULL AND [ClaimedAtUtc] < @leaseExpiry)
             ORDER BY [EnqueuedAtUtc]

@@ -6,9 +6,10 @@ using Testcontainers.PostgreSql;
 using Xunit;
 
 /// <summary>
-/// Boots a single PostgreSQL container for the native-claim concurrency suite. If Docker is
-/// unreachable the start failure is captured in <see cref="SkipReason"/> so the tests skip with a
-/// clear message instead of failing the local build; CI with Docker runs them for real.
+/// Boots a single PostgreSQL container for the native-claim concurrency suite. Only a genuinely
+/// unavailable Docker environment produces a skip (see <see cref="DockerAvailability"/>); a
+/// schema/connection/provider failure once the container is up fails the suite instead of masking
+/// the regression as a Docker skip.
 /// </summary>
 public sealed class PostgresFixture : IAsyncLifetime
 {
@@ -19,7 +20,7 @@ public sealed class PostgresFixture : IAsyncLifetime
     /// <summary>Connection string for the running container, or null when Docker was unavailable.</summary>
     public string? ConnectionString { get; private set; }
 
-    /// <summary>Non-null when the container could not start; tests use it as their skip reason.</summary>
+    /// <summary>Non-null only when Docker itself was unavailable; tests use it as their skip reason.</summary>
     public string? SkipReason { get; private set; }
 
     public DbContextOptions<NativeClaimDbContext> NewOptions()
@@ -29,20 +30,18 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        try
-        {
-            await container.StartAsync();
-            ConnectionString = container.GetConnectionString();
+        SkipReason = await DockerAvailability.StartOrSkipAsync(
+            startAsync: () => container.StartAsync(),
+            setupAsync: async () =>
+            {
+                ConnectionString = container.GetConnectionString();
 
-            // Create the OrionPatch schema once for the whole suite.
-            var options = NewOptions();
-            await using var db = new NativeClaimDbContext(options);
-            await db.Database.EnsureCreatedAsync();
-        }
-        catch (Exception ex)
-        {
-            SkipReason = $"PostgreSQL Testcontainer unavailable (Docker not running?): {ex.Message}";
-        }
+                // Create the OrionPatch schema once for the whole suite. A failure here is real and
+                // must fail the suite, not skip it.
+                var options = NewOptions();
+                await using var db = new NativeClaimDbContext(options);
+                await db.Database.EnsureCreatedAsync();
+            });
     }
 
     public async Task DisposeAsync()
