@@ -59,7 +59,7 @@ OpenTelemetry.
 - `OrionPatch.EntityFrameworkCore` - `IOutboxStorage` over EF Core; `OrionPatch_Outbox`
   table; provider-aware claim routing (SQL Server / PostgreSQL / MySQL through the
   `SkipLockedClaimStrategy`, SQLite and unknown providers through a portable compare-and-swap
-  fallback). Native `SKIP LOCKED` SQL is still pending; see v0.4.0 below.
+  fallback). Native `SKIP LOCKED` SQL shipped in v0.4.0; see below.
 - `OrionPatch.Testing` - in-memory storage, deterministic dispatcher (no background
   thread), capturing sink, fluent assertions.
 - OpenTelemetry `ActivitySource` and `Meter` (`Moongazing.OrionPatch`) - spans, counters,
@@ -160,25 +160,40 @@ prior behaviour, so it is backward compatible.
 
 ---
 
-## v0.4.0 - Dispatch performance and ordering *(planned, Q4 2026)*
+## v0.4.0 - Dispatch performance *(partially shipped 2026-06-28)*
 
-The dispatcher today polls on an interval and claims unordered batches. This release tackles the
-two longest-standing performance items and adds opt-in ordering for consumers that need it.
+The dispatcher polls on an interval and claims unordered batches. This release lands the
+longest-standing performance item - native provider claim SQL - in the two existing packages.
+Ordering, push-based dispatch, and the stress harness are deferred (they need new packages or
+non-additive surface) and tracked below.
 
-- **Native `SKIP LOCKED` claim** - `SkipLockedClaimStrategy` currently delegates to the portable
-  compare-and-swap fallback. Land the real provider SQL (`FOR UPDATE SKIP LOCKED` + `RETURNING`
-  on PostgreSQL, the `OUTPUT` / readpast equivalent on SQL Server, the two-statement MySQL form)
-  so high-contention multi-dispatcher deployments stop wasting claim round-trips.
+- **Native `SKIP LOCKED` claim** *(shipped 2026-06-28)* - `SkipLockedClaimStrategy` now issues the
+  real provider SQL instead of delegating to the portable compare-and-swap fallback:
+  `UPDATE ... WHERE Id IN (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING ...` on PostgreSQL, a CTE
+  with `WITH (UPDLOCK, READPAST, ROWLOCK)` + `OUTPUT inserted.*` on SQL Server, and a
+  `SELECT ... FOR UPDATE SKIP LOCKED` + `UPDATE` + re-select sequence inside one transaction on
+  MySQL / MariaDB. High-contention multi-dispatcher deployments no longer burn a no-op round-trip
+  per claim race loser; each due row is handed to exactly one of N replicas. SQLite and unrecognized
+  providers keep the portable compare-and-swap fallback. Verified by a competing-consumers
+  Testcontainers test (real PostgreSQL and SQL Server) asserting no row is ever double-claimed.
+
+### Still planned
+
+- **Partitioned / ordered dispatch** - opt-in per-key ordering (`OutboxEnqueueOptions.PartitionKey`)
+  so messages sharing a key dispatch in enqueue order while distinct keys still dispatch
+  concurrently. At-least-once is unchanged; this constrains ordering, not delivery count. *Deferred
+  from v0.4.0: needs a new ordering-key column, enqueue-API surface, and dispatcher coordination
+  beyond an additive claim-path change.*
 - **Push-based dispatch** - opt-in `OrionPatch.EntityFrameworkCore.Postgres.ListenNotify`
   (PostgreSQL `LISTEN/NOTIFY`) and `...SqlServer.ServiceBroker`, each falling back to polling if
   the channel is unreachable. Removes the polling latency floor and the idle-poll cost for
-  low-traffic services (the `poll.idle` counter quantifies that cost today).
-- **Partitioned / ordered dispatch** - opt-in per-key ordering (`OutboxEnqueueOptions.PartitionKey`)
-  so messages sharing a key dispatch in enqueue order while distinct keys still dispatch
-  concurrently. At-least-once is unchanged; this constrains ordering, not delivery count.
+  low-traffic services (the `poll.idle` counter quantifies that cost today). *Deferred from v0.4.0:
+  each needs a dedicated new package.*
 - **Concurrency stress harness** - multi-process integration test running N dispatchers against
   one backend, asserting at-least-once delivery and exclusive claim under contention. Guards the
-  lease / renewal and the new native-claim paths against regressions.
+  lease / renewal and the native-claim paths against regressions. *Deferred from v0.4.0: belongs in
+  a dedicated harness package. The in-process competing-consumers Testcontainers test shipped with
+  the native claim covers exclusive-claim safety in the meantime.*
 
 ---
 
