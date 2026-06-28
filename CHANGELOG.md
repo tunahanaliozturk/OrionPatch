@@ -6,6 +6,33 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-28
+
+### Added
+
+#### Native `SKIP LOCKED` batch claim on the EF Core backend
+
+Through v0.3.x the EF Core claim strategy delegated every provider to the portable compare-and-swap fallback: each claim shortlisted candidate ids and then issued one `UPDATE ... WHERE` per candidate, so under multi-dispatcher contention the race losers each burned a no-op round-trip. This release lands the real provider-native lock-and-claim so high-contention deployments stop paying that cost, while keeping the portable path for backends without `SKIP LOCKED`. Purely additive: the storage SPI, public APIs, claim semantics (eligibility, FIFO order, lease expiry, idempotency), and on-the-wire behavior are unchanged; only the SQL the native providers issue is different.
+
+- `SkipLockedClaimStrategy` now issues genuine provider-native SQL instead of delegating to compare-and-swap:
+  - **PostgreSQL** (9.5+): a single `UPDATE ... WHERE "Id" IN (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING ...` statement — lock, claim, and return in one atomic round-trip.
+  - **SQL Server** (2008+): a single CTE with `WITH (UPDLOCK, READPAST, ROWLOCK)` plus `OUTPUT inserted.*` — acquire update locks, skip rows another dispatcher already locked, claim, and return in one atomic round-trip.
+  - **MySQL / MariaDB** (8.0 / 10.6+): a three-statement sequence inside one transaction — `SELECT ... FOR UPDATE SKIP LOCKED` takes the row locks, an `UPDATE ... WHERE Id IN (...)` claims exactly those ids, and a re-select reads the claimed rows back. The select's locks are held until the transaction commits, so a competing dispatcher's concurrent select skips them.
+- Competing-consumers safe by construction: a row another dispatcher has locked is skipped, not blocked on, so each due row is handed to exactly one of N concurrent dispatcher replicas. Race losers no longer consume a no-op claim round-trip.
+- Provider routing is unchanged (`ProviderClaimStrategy.For` on the DbContext's provider name): SQL Server, PostgreSQL, and MySQL get the native strategy; **SQLite and every unrecognized provider keep the portable `CompareAndSwapClaimStrategy`** (SQLite has no `SKIP LOCKED`), so nothing regresses for those backends.
+- The native statement runs on the same connection and enlists in the caller's ambient transaction when one is open. Claimed rows are projected straight from the `RETURNING` / `OUTPUT` result set into `OutboxRow` (no change-tracker round-trip) and re-sorted by `EnqueuedAtUtc` so the observable FIFO order matches the portable strategy.
+- No schema change: the native claim targets the existing `OrionPatch_Outbox` table and its indexes; no new migration is required.
+
+### Tests
+
+- `PostgresNativeClaimTests` / `SqlServerNativeClaimTests`: a competing-consumers test runs N concurrent claimers, each on its own connection, gated to start together against a real PostgreSQL and SQL Server database (Testcontainers), and asserts every seeded row is claimed by exactly one claimer (no double-claim) and the persisted rows all end up `Claimed`. Deterministic (a start barrier, not sleeps). The tests skip with a clear message when Docker is unavailable, so the local SQLite/unit suite is unaffected; the native concurrency assertion is exercised wherever Docker is present (CI).
+- The existing SQLite `EfCoreOutboxStorageTests` continue to cover the portable compare-and-swap claim path unchanged.
+
+### Still planned (deferred from the v0.4.0 milestone)
+
+- **Partitioned / ordered dispatch** (opt-in per-key ordering): deferred. It requires a new ordering-key column, enqueue-API surface, and dispatcher coordination that exceed an additive claim-path change.
+- **Push-based dispatch** (PostgreSQL `LISTEN/NOTIFY`, SQL Server Service Broker) and the **multi-process concurrency stress harness**: deferred, since each needs a dedicated new package outside the two existing ones.
+
 ## [0.3.3] - 2026-06-27
 
 ### Added
