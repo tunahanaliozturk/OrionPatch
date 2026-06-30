@@ -7,6 +7,7 @@
     <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Orion.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />

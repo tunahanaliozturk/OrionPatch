@@ -6,6 +6,54 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-01
+
+### Changed
+
+#### Converged onto the shared `Orion.Abstractions` primitives (async observer path)
+
+This release is the convergence pilot that re-bases OrionPatch's private fault-safe observer
+machinery onto the published `Orion.Abstractions` package instead of a bespoke in-tree copy.
+The pilot deliberately validates the pattern on the asynchronous observer path only; it is purely
+internal plumbing. **No public API changed and no runtime behavior changed**: the observer
+contract, the metrics, the spans, and the outbox semantics are all byte-identical to v0.4.0.
+
+- The dispatcher's fault-safe invocation of `IOutboxDispatchObserver.OnDispatchedAsync` now goes
+  through `Moongazing.Orion.Abstractions.Observers.SafeObserverInvoker.InvokeAsync` rather than a
+  hand-written `try`/`catch`. The shared invoker reproduces the prior contract exactly: a null
+  (or `NullOutboxDispatchObserver`) observer is skipped with no allocation, an
+  `OperationCanceledException` propagates when the dispatch token is cancelled (cooperative
+  shutdown is never downgraded to a swallowed fault), and every other observer fault is swallowed
+  so an observer outage can never roll back or abort a dispatch whose row is already completed.
+- The existing observer-fault side effects are preserved unchanged through the invoker's `onFault`
+  hook: the `orionpatch.outbox.dispatch_observer_failures` counter still increments tagged with the
+  exception type, and the same warning (`EventId 4002`) is still logged.
+- `IOutboxDispatchObserver` and `NullOutboxDispatchObserver` are unchanged and remain public.
+
+#### Instrumentation convergence deferred
+
+`OrionPatchDiagnostics` was **not** re-based onto `Orion.Abstractions.OrionInstrumentation` in this
+release. `OrionPatchDiagnostics` is a `public static` surface whose `ActivitySource` / `Meter` are
+constructed by name only (no version), whereas `OrionInstrumentation` is an instance base class that
+requires a version argument. Re-basing it could not preserve the exact static public surface and the
+existing source/metric names without an observability-visible change, so the instrumentation step is
+deferred. The observer convergence stands on its own as the pilot result.
+
+### Dependencies
+
+- Added a `PackageReference` to `Orion.Abstractions` (0.3.0) on the core `OrionPatch` package.
+- Raised the centrally managed floor of `Microsoft.Extensions.DependencyInjection.Abstractions` from
+  `8.0.2` to `9.0.0`. This is the transitive minimum `Orion.Abstractions` 0.3.0 requires; it is a
+  build-time floor only and does not change OrionPatch's `net8.0` / `net9.0` / `net10.0` targets or
+  any runtime behavior.
+
+### Tests
+
+- `DispatchObserverFaultSafetyTests` drives the dispatcher end-to-end and proves the converged async
+  observer path preserves the fault-safe contract: a throwing `OnDispatchedAsync` does not abort the
+  dispatch (the sink fires, the row is durably completed) and still logs + counts the fault, while a
+  non-throwing observer still receives the exact envelope / attempt / duration.
+
 ## [0.4.0] - 2026-06-28
 
 ### Added

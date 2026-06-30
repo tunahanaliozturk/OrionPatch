@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Moongazing.Orion.Abstractions.Observers;
 using Moongazing.OrionPatch.Abstractions;
 using Moongazing.OrionPatch.Configuration;
 using Moongazing.OrionPatch.Models;
@@ -300,26 +301,21 @@ public sealed partial class OutboxDispatcherHostedService : BackgroundService
             // does NOT roll the completion back; observer exceptions are logged + counted
             // by the v0.2.19 dead_letter_sink_failures shape (we reuse RecordDeadLetterSinkFailure
             // because the semantic is identical: 'a consumer hook misbehaved, db is correct').
-            var observerRef = dispatchObserver;
-            if (observerRef is not null)
-            {
-                try
-                {
-                    await observerRef.OnDispatchedAsync(envelope, attempt, elapsedMs, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-#pragma warning disable CA1031
-                catch (Exception observerEx)
-#pragma warning restore CA1031
+            // Converged onto Orion.Abstractions SafeObserverInvoker.InvokeAsync (pilot). The
+            // invoker reproduces the prior bespoke contract exactly: a null observer is skipped,
+            // an OperationCanceledException is re-thrown when the token is cancelled (cooperative
+            // shutdown is never downgraded to a swallowed fault), and every other observer fault is
+            // swallowed. The onFault hook preserves the byte-identical side effects of the old
+            // catch block: count the failure tagged with the exception type, then log it.
+            await SafeObserverInvoker.InvokeAsync(
+                dispatchObserver,
+                observer => observer.OnDispatchedAsync(envelope, attempt, elapsedMs, cancellationToken),
+                observerEx =>
                 {
                     OrionPatchDiagnostics.RecordDispatchObserverFailure(observerEx.GetType().Name);
                     LogDispatchObserverFailed(row.Id, observerEx);
-                }
-            }
+                },
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
