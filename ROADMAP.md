@@ -16,7 +16,7 @@ If an item here matters to you, open a GitHub issue so we can weigh it against e
 
 ## Released
 
-Current version: **0.4.0**. A transactional outbox primitive plus an idempotent inbox, three
+Current version: **0.4.1**. A transactional outbox primitive plus an idempotent inbox, three
 broker sinks (Kafka, RabbitMQ, Azure Service Bus), a durable dead-letter store with replay /
 redrive, retention-based archival, a native provider `SKIP LOCKED` batch claim, and an
 OpenTelemetry surface. The full per-version history is in the
@@ -38,6 +38,7 @@ OpenTelemetry surface. The full per-version history is in the
 - **v0.3.2** (2026-06-22) - Dead-letter store and archival brought to the production EF Core backend (`EfCoreOutboxStorage : IDeadLetterStore, IOutboxArchivalStore`); new `OrionPatch_DeadLetter` and `OrionPatch_OutboxArchive` tables.
 - **v0.3.3** (2026-06-27) - Dead-letter replay / redrive API (`IDeadLetterReplayStore`) on both the in-memory and EF Core stores. See the dedicated section below.
 - **v0.4.0** (2026-06-28) - Native provider `SKIP LOCKED` batch claim. `SkipLockedClaimStrategy` issues real lock-and-claim SQL per provider (`FOR UPDATE SKIP LOCKED` on PostgreSQL / MySQL, `WITH (UPDLOCK, READPAST, ROWLOCK, READCOMMITTEDLOCK)` on SQL Server - the `READCOMMITTEDLOCK` hint keeps `READPAST` skipping locked rows even under `READ_COMMITTED_SNAPSHOT`). SQLite and unrecognized providers keep the portable compare-and-swap fallback. See the dedicated section below.
+- **v0.4.1** (2026-07-01) - **Convergence pilot onto `Orion.Abstractions`.** The dispatcher's fault-safe async observer invocation (`IOutboxDispatchObserver.OnDispatchedAsync`) now runs through the shared `SafeObserverInvoker.InvokeAsync` instead of a bespoke in-tree `try`/`catch`, with the observer-fault logging + `dispatch_observer_failures` counter preserved through the invoker's `onFault` hook. Internal plumbing only: zero public-API change, zero behavior change (the observer contract, metrics, spans, and outbox semantics are byte-identical to v0.4.0). Instrumentation convergence onto `OrionInstrumentation` was deferred because it could not preserve the existing `public static OrionPatchDiagnostics` surface and the exact source/metric names without an observability-visible change.
 
 ---
 
