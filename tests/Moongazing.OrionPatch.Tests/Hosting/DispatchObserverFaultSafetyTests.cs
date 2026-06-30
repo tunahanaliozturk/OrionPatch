@@ -49,7 +49,7 @@ public sealed class DispatchObserverFaultSafetyTests
             // Dispatch must complete despite the throwing observer: the sink fired and the row
             // is durably Processed. The observer runs AFTER CompleteAsync, so a fault cannot
             // roll the completion back.
-            await WaitFor(() => sink.Dispatched.Count == 1, TimeSpan.FromSeconds(5));
+            await WaitFor(() => sink.DispatchedCount == 1, TimeSpan.FromSeconds(5));
             await WaitFor(() => storage.Rows[rowId].Status == OutboxStatus.Processed, TimeSpan.FromSeconds(5));
 
             // The fault is swallowed and surfaced as a logged warning (EventId 4002), not rethrown.
@@ -67,7 +67,7 @@ public sealed class DispatchObserverFaultSafetyTests
             await svc.StopAsync(default);
         }
 
-        Assert.Single(sink.Dispatched);
+        Assert.Equal(1, sink.DispatchedCount);
         Assert.Equal(OutboxStatus.Processed, storage.Rows[rowId].Status);
         Assert.True(observer.WasInvoked);
 
@@ -105,15 +105,15 @@ public sealed class DispatchObserverFaultSafetyTests
         using var cts = new CancellationTokenSource();
         await svc.StartAsync(cts.Token);
 
-        await WaitFor(() => observer.WasInvoked, TimeSpan.FromSeconds(5));
+        var invocation = await observer.WaitForInvocationAsync(TimeSpan.FromSeconds(5));
 
         await cts.CancelAsync();
         await svc.StopAsync(default);
 
-        Assert.NotNull(observer.CapturedEnvelope);
-        Assert.Equal(rowId, observer.CapturedEnvelope!.Id);
-        Assert.Equal(1, observer.CapturedAttempt);
-        Assert.True(observer.CapturedDuration >= 0d);
+        Assert.NotNull(invocation.Envelope);
+        Assert.Equal(rowId, invocation.Envelope!.Id);
+        Assert.Equal(1, invocation.Attempt);
+        Assert.True(invocation.Duration >= 0d);
     }
 
     private static System.Collections.Generic.List<(string ExceptionType, long Value)> StartObserverFailureListener(out MeterListener listener)
@@ -182,19 +182,30 @@ public sealed class DispatchObserverFaultSafetyTests
 
     private sealed class CapturingObserver : IOutboxDispatchObserver
     {
-        private int invoked;
-        public bool WasInvoked => Volatile.Read(ref invoked) > 0;
-        public OutboxEnvelope? CapturedEnvelope { get; private set; }
-        public int CapturedAttempt { get; private set; } = -1;
-        public double CapturedDuration { get; private set; } = -1d;
+        private readonly TaskCompletionSource<(OutboxEnvelope Envelope, int Attempt, double Duration)> firstInvocation =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task OnDispatchedAsync(OutboxEnvelope envelope, int attemptCount, double dispatchDurationMs, CancellationToken cancellationToken)
         {
-            CapturedEnvelope = envelope;
-            CapturedAttempt = attemptCount;
-            CapturedDuration = dispatchDurationMs;
-            Interlocked.Increment(ref invoked);
+            // Publish the captured values atomically through the TCS: completing the task
+            // happens-before its awaiter resumes, so the test thread observes the exact
+            // envelope / attempt / duration without a data race on shared fields.
+            firstInvocation.TrySetResult((envelope, attemptCount, dispatchDurationMs));
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Awaits the first observer invocation (with a timeout that fails the test deterministically
+        /// rather than hanging) and returns the captured arguments, safely published across threads.
+        /// </summary>
+        public async Task<(OutboxEnvelope? Envelope, int Attempt, double Duration)> WaitForInvocationAsync(TimeSpan timeout)
+        {
+            var completed = await Task.WhenAny(firstInvocation.Task, Task.Delay(timeout));
+            if (completed != firstInvocation.Task)
+            {
+                throw new TimeoutException("Observer was not invoked within timeout.");
+            }
+            return await firstInvocation.Task;
         }
     }
 
@@ -270,12 +281,28 @@ public sealed class DispatchObserverFaultSafetyTests
 
     private sealed class CapturingSink : IOutboxSink
     {
-        public List<OutboxEnvelope> Dispatched { get; } = new();
+        private readonly List<OutboxEnvelope> dispatched = new();
+
+        /// <summary>
+        /// Count of dispatched envelopes, read under the same lock that guards the write on the
+        /// dispatcher's background thread so the test thread never races the producer.
+        /// </summary>
+        public int DispatchedCount
+        {
+            get
+            {
+                lock (dispatched)
+                {
+                    return dispatched.Count;
+                }
+            }
+        }
+
         public Task SendAsync(OutboxEnvelope envelope, CancellationToken cancellationToken = default)
         {
-            lock (Dispatched)
+            lock (dispatched)
             {
-                Dispatched.Add(envelope);
+                dispatched.Add(envelope);
             }
             return Task.CompletedTask;
         }
