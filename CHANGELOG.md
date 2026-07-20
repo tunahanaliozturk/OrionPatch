@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD024 -->
+
 # Changelog
 
 All notable changes to OrionPatch are documented in this file. The format is based on
@@ -5,6 +7,27 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Security
+
+Four advisories reached the repository through transitive dependencies of the EF Core **test**
+project. **None is present in any shipped package**, so no released version of OrionPatch is
+affected and there is nothing for a consumer to do. They are pinned so the repository scans
+clean and a contributor's `dotnet restore` no longer warns.
+
+- **GHSA-wvxc-855f-jvrv** and **GHSA-m5vv-6r4h-3vj9** (Moderate, elevation of privilege), and
+  **GHSA-x674-v45j-fwxw** (Low). `Azure.Identity` 1.10.3 and `Microsoft.Identity.Client` 4.56.0
+  arrive through `Microsoft.EntityFrameworkCore.SqlServer` → `Microsoft.Data.SqlClient`. Pinned
+  to 1.13.1 and 4.66.2.
+- **GHSA-2m69-gcr7-jv3q** (High, in the bundled SQLite native library).
+  `SQLitePCLRaw.lib.e_sqlite3` 2.1.6 arrives through `Microsoft.EntityFrameworkCore.Sqlite` →
+  `Microsoft.Data.Sqlite`. Pinned to 2.1.12, with the bundle, core, and provider packages pinned
+  alongside so the four stay on one version.
+
+`Azure.Identity` is deliberately pinned to 1.13.1 rather than the current 1.21.0: the latter
+pulls `Azure.Core` 1.53.0, which requires `Microsoft.Extensions.*` 10.0.3 and would drag the
+repository's whole 8.0.x graph forward for the sake of a test-only transitive. 1.13.1 clears
+every advisory and is the version OrionVault pins, so the family stays consistent.
 
 ## [0.4.1] - 2026-07-01
 
