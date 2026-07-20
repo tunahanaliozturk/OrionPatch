@@ -33,4 +33,36 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageVersion Include="coverlet.collector" Version="6.0.2" />
   </ItemGroup>
+  <!--
+    Security pins for packages we do not reference directly. Each one is a transitive dependency
+    that resolved to a version carrying an advisory; the pin lifts it to a patched release.
+    None of these reach a shipped package - they arrive through the EF Core test project only.
+    Review whenever a direct dependency moves: once the parent's graph resolves above the pin,
+    the entry here is dead weight and should be removed.
+  -->
+  <ItemGroup Label="Security pins">
+    <!--
+      GHSA-wvxc-855f-jvrv and GHSA-m5vv-6r4h-3vj9 (both Moderate, elevation of privilege).
+      Azure.Identity 1.10.3 and Microsoft.Identity.Client 4.56.0 reach the EF Core test project
+      through Microsoft.EntityFrameworkCore.SqlServer -> Microsoft.Data.SqlClient. MSAL also
+      carries GHSA-x674-v45j-fwxw (Low).
+
+      Deliberately NOT the latest: Azure.Identity 1.21.0 pulls Azure.Core 1.53.0, which requires
+      Microsoft.Extensions.* >= 10.0.3 and would drag this repo's whole 8.0.x graph forward for
+      the sake of a test-only transitive. 1.13.1 clears both advisories and holds the line - it
+      is also the version OrionVault pins, so the family stays consistent.
+    -->
+    <PackageVersion Include="Azure.Identity" Version="1.13.1" />
+    <PackageVersion Include="Microsoft.Identity.Client" Version="4.66.2" />
+    <!--
+      GHSA-2m69-gcr7-jv3q (High): the bundled SQLite native library, reached through
+      Microsoft.EntityFrameworkCore.Sqlite -> Microsoft.Data.Sqlite, which resolves 2.1.6.
+      The bundle, core, and provider packages are pinned alongside the native lib so the four
+      stay on one version rather than straddling the 2.1.6/2.1.12 boundary.
+    -->
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.core" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.provider.e_sqlite3" Version="2.1.12" />
+  </ItemGroup>
 </Project>
