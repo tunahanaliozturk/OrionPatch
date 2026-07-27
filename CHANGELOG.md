@@ -8,6 +8,17 @@ All notable changes to OrionPatch are documented in this file. The format is bas
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-27
+
+### Fixed
+
+- **The broker sub-packages shipped to NuGet without a package icon.**
+  `OrionPatch.Kafka`, `OrionPatch.AzureServiceBus`, and `OrionPatch.RabbitMQ` set no
+  `PackageIcon` because the icon (and README) were packed per-csproj on only the core, EF Core,
+  and Testing projects. The icon and README are now packed from `Directory.Build.props` for every
+  packable project, so a newly added sub-package can never ship iconless again. No code changed;
+  the six shipping packages are otherwise identical to 0.4.1.
+
 ### Security
 
 Four advisories reached the repository through transitive dependencies of the EF Core **test**
