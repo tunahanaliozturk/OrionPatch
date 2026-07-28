@@ -21,11 +21,11 @@
 
 OrionPatch is a transactional outbox primitive for .NET. You enqueue a message inside an EF Core `SaveChanges` call; it commits in the same transaction as your domain data; a background dispatcher hands it to a pluggable `IOutboxSink` at-least-once.
 
-The current release is 0.3.0. The "What ships" and "does NOT do" sections below describe the original v0.1.0 surface as historical record; capabilities added since then (inbox, concrete broker sinks, and the v0.3.0 dead-letter store and archival APIs) are documented in their own sections and in the [CHANGELOG](CHANGELOG.md).
+The current release is 0.4.2. The sections below describe the original v0.1.0 surface as historical record; capabilities added since then — the inbox / dedup table, the concrete RabbitMQ / Azure Service Bus / Kafka broker sinks, and the dead-letter store and archival APIs — are listed in the package table below and detailed in the [CHANGELOG](CHANGELOG.md).
 
-The package is deliberately small. It does NOT ship a broker — RabbitMQ, Azure Service Bus, Kafka, NATS sinks live in separate opt-in sub-packages on the v0.2+ roadmap. v0.1.0 ships one concrete sink: `ChannelOutboxSink` (in-process `System.Threading.Channels`, zero external dependency, useful for monoliths and tests).
+The core package is deliberately small and ships no broker itself. Concrete broker sinks for **RabbitMQ**, **Azure Service Bus**, and **Kafka** ship as separate opt-in sub-packages (`OrionPatch.RabbitMQ`, `OrionPatch.AzureServiceBus`, `OrionPatch.Kafka`); a NATS sink remains on the roadmap. The core also ships `ChannelOutboxSink` (in-process `System.Threading.Channels`, zero external dependency, useful for monoliths and tests).
 
-It is also deliberately scoped. No inbox in v0.1.0 - inbox idempotency, dedup tables, broker-side consumer wrappers are v0.2 work. v0.1.0 owns one thing well: getting a message from "I just did a domain mutation" to "the sink received it, exactly once per row, even if my process crashes between commit and send."
+At its core it owns one thing well: getting a message from "I just did a domain mutation" to "the sink received it — at least once per row, even if my process crashes between commit and send." (Delivery is at-least-once; sinks must be idempotent.) Inbox idempotency / dedup and the broker sinks build outward from that core in the sub-packages above.
 
 ## How it works
 
@@ -70,7 +70,7 @@ The diagram shows the at-least-once contract clearly: the outbox row and the dom
 | Transactional enqueue            | Yes        | Yes             | Yes         | Yes       |
 | At-least-once dispatch           | Yes        | Maybe           | Yes         | Yes       |
 | EF Core SaveChangesInterceptor   | Yes        | Yes             | Optional    | -         |
-| Multi-provider claim (SQL Server/Postgres/MySQL/SQLite) | Yes (v0.2 for native SKIP LOCKED) | Maybe | Optional | Yes |
+| Multi-provider claim (SQL Server/Postgres/MySQL/SQLite) | Yes (native SKIP LOCKED on Postgres/MySQL) | Maybe | Optional | Yes |
 | Pluggable sink (no broker bundled) | Yes      | -               | Bundled     | Bundled   |
 | Built-in retry + dead-letter     | Yes        | Maybe           | Yes         | Yes       |
 | Dead-letter store (route exhausted rows out of the hot outbox) | Yes (v0.3) | Maybe | Yes | Yes |
@@ -146,19 +146,21 @@ public sealed class MyKafkaSink : IOutboxSink
 
 That's it. The dispatcher runs as a hosted service; messages flow from your transaction into the sink.
 
-## What ships in v0.1.0
+## Packages
 
 | Package | Description |
 |---------|-------------|
 | `OrionPatch` | Core: `IOutbox`, `IOutboxSink`, `IOutboxStorage`, dispatcher hosted service, telemetry, options. Includes `ChannelOutboxSink`. |
-| `OrionPatch.EntityFrameworkCore` | EF Core storage backend: `OrionPatch_Outbox` table, provider-aware claim (`SKIP LOCKED` for SqlServer/Postgres/MySQL deferred to v0.2; SQLite + unknown providers use a portable compare-and-swap fallback today), `SaveChangesInterceptor` for transactional enqueue. |
+| `OrionPatch.EntityFrameworkCore` | EF Core storage backend: `OrionPatch_Outbox` table, provider-aware claim (native `FOR UPDATE SKIP LOCKED` on Postgres/MySQL; SQLite + unknown providers use a portable compare-and-swap fallback), `SaveChangesInterceptor` for transactional enqueue, and an inbox / dedup table. |
 | `OrionPatch.Testing` | Test helpers: in-memory storage, deterministic dispatcher, capturing sink, test clock, fluent assertions. Zero EF Core dependency. |
+| `OrionPatch.RabbitMQ` | RabbitMQ broker sink (`AddOrionPatchRabbitMqSink`). |
+| `OrionPatch.AzureServiceBus` | Azure Service Bus broker sink (`AddOrionPatchAzureServiceBusSink`). |
+| `OrionPatch.Kafka` | Kafka broker sink (`AddOrionPatchKafkaSink`) plus a Kafka inbox (`AddOrionPatchKafkaInbox`). |
 
-## What v0.1.0 does NOT do
+## What the core does NOT do
 
-- No inbox / dedup table (v0.2).
-- No concrete broker sinks (RabbitMQ / Azure Service Bus / Kafka / NATS) — those are opt-in sub-packages on the v0.2+ roadmap.
-- No saga / process manager (that is OrionFlow territory).
+- No broker bundled in the core — RabbitMQ, Azure Service Bus, and Kafka sinks ship as opt-in sub-packages; a NATS sink is still on the roadmap.
+- No saga / process manager (that is OrionSaga territory).
 - No distributed transactions across heterogeneous sinks.
 - No push-based dispatch (PostgreSQL `LISTEN/NOTIFY`, SQL Server Service Broker) — v0.3+ work.
 
@@ -231,7 +233,7 @@ See [benchmarks.md](benchmarks.md) for the scenarios we plan to measure and the 
 
 ## Roadmap
 
-The current release is 0.3.0, which shipped the outbox dead-letter store (`IDeadLetterStore`) and outbox archival (`IOutboxArchivalStore`) described above. See the [CHANGELOG](CHANGELOG.md) for the full per-version history.
+The current release is 0.4.2, which shipped the outbox dead-letter store (`IDeadLetterStore`) and outbox archival (`IOutboxArchivalStore`) described above. See the [CHANGELOG](CHANGELOG.md) for the full per-version history.
 
 12-month forward plan in [ROADMAP.md](ROADMAP.md). The next milestones:
 
