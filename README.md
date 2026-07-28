@@ -25,7 +25,7 @@ The current release is 0.4.2. The sections below describe the original v0.1.0 su
 
 The core package is deliberately small and ships no broker itself. Concrete broker sinks for **RabbitMQ**, **Azure Service Bus**, and **Kafka** ship as separate opt-in sub-packages (`OrionPatch.RabbitMQ`, `OrionPatch.AzureServiceBus`, `OrionPatch.Kafka`); a NATS sink remains on the roadmap. The core also ships `ChannelOutboxSink` (in-process `System.Threading.Channels`, zero external dependency, useful for monoliths and tests).
 
-At its core it owns one thing well: getting a message from "I just did a domain mutation" to "the sink received it, exactly once per row, even if my process crashes between commit and send." Inbox idempotency / dedup and the broker sinks build outward from that core in the sub-packages above.
+At its core it owns one thing well: getting a message from "I just did a domain mutation" to "the sink received it — at least once per row, even if my process crashes between commit and send." (Delivery is at-least-once; sinks must be idempotent.) Inbox idempotency / dedup and the broker sinks build outward from that core in the sub-packages above.
 
 ## How it works
 
@@ -146,7 +146,7 @@ public sealed class MyKafkaSink : IOutboxSink
 
 That's it. The dispatcher runs as a hosted service; messages flow from your transaction into the sink.
 
-## What ships in v0.1.0
+## Packages
 
 | Package | Description |
 |---------|-------------|
