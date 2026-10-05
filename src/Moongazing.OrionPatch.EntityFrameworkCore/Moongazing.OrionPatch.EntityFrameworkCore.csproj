@@ -3,6 +3,7 @@
     <PackageId>OrionPatch.EntityFrameworkCore</PackageId>
     <Description>EF Core storage backend for OrionPatch. Adds the OrionPatch_Outbox table; SaveChangesInterceptor flushes buffered messages into the user's transaction.</Description>
     <PackageTags>outbox;ef-core;entity-framework;orionpatch;transactional;savechangesinterceptor</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
@@ -12,5 +13,8 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Moongazing.OrionPatch.EntityFrameworkCore.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

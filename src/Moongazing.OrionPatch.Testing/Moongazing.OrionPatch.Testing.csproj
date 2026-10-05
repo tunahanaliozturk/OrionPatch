@@ -3,6 +3,7 @@
     <PackageId>OrionPatch.Testing</PackageId>
     <Description>Test helpers for OrionPatch. In-memory IOutboxStorage, deterministic dispatcher driver, CapturingOutboxSink, TestClock, and fluent OutboxAssertions. Zero EF Core dependency.</Description>
     <PackageTags>outbox;testing;orionpatch;in-memory;deterministic</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
@@ -10,5 +11,8 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Moongazing.OrionPatch.Testing.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

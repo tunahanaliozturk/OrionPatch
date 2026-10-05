@@ -27,17 +27,15 @@
     <PackageProjectUrl>https://github.com/tunahanaliozturk/OrionPatch</PackageProjectUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
     <Version>0.4.2</Version>
   </PropertyGroup>
   <!--
-    Pack the icon, logo, and README into every packable project from one place, so a newly added
-    sub-package can never ship to NuGet without them (the icon was missing on the Kafka /
-    AzureServiceBus / RabbitMQ sub-packages when this was set per-csproj).
+    Pack the icon into every packable project from one place, so a newly added sub-package can
+    never ship to NuGet without it (the icon was missing on the Kafka / AzureServiceBus / RabbitMQ
+    sub-packages when this was set per-csproj). Each csproj packs its own docs/README.md as the
+    package readme.
   -->
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
     <None Include="$(MSBuildThisFileDirectory)docs/icon.png" Pack="true" PackagePath="\" Visible="false" />
-    <None Include="$(MSBuildThisFileDirectory)docs/logo.png" Pack="true" PackagePath="docs/" Visible="false" />
-    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 </Project>

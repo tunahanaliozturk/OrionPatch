@@ -1,10 +1,21 @@
 # OrionPatch.EntityFrameworkCore
 
-EF Core storage backend for [OrionPatch](https://github.com/tunahanaliozturk/OrionPatch). Adds the `OrionPatch_Outbox` table with provider-aware competing-consumers claim and a `SaveChangesInterceptor` that flushes buffered messages into your transaction.
+EF Core storage backend for OrionPatch: a `SaveChangesInterceptor` writes outbox rows in the same transaction as your data, and a provider-native claim lets several dispatchers share one `OrionPatch_Outbox` table safely.
 
-## 30-second quick start
+![OrionPatch outbox write and dispatch: SaveChangesAsync commits the outbox row with your data, the dispatcher claims due rows, calls IOutboxSink.SendAsync, then marks the row Processed](https://raw.githubusercontent.com/tunahanaliozturk/OrionPatch/main/docs/diagrams/outbox-dispatch.png)
+
+## Install
+
+    dotnet add package OrionPatch.EntityFrameworkCore
+
+It plugs into `OrionPatch` (added as a dependency). Add the EF Core provider for your database as well.
+
+## Quick start
 
 ```csharp
+using Moongazing.OrionPatch.DependencyInjection;
+using Moongazing.OrionPatch.EntityFrameworkCore.DependencyInjection;
+
 services.AddDbContext<AppDbContext>((sp, options) =>
 {
     options.UseNpgsql(connectionString);
@@ -13,10 +24,10 @@ services.AddDbContext<AppDbContext>((sp, options) =>
 
 services.AddOrionPatch()
     .UseEntityFrameworkCore<AppDbContext>()
-    .UseSink<MyKafkaSink>();
+    .UseChannelSink();           // or a broker sink package
 ```
 
-In your `DbContext.OnModelCreating`:
+In your `DbContext` (namespace `Moongazing.OrionPatch.EntityFrameworkCore`):
 
 ```csharp
 protected override void OnModelCreating(ModelBuilder modelBuilder) =>
@@ -26,58 +37,49 @@ protected override void OnModelCreating(ModelBuilder modelBuilder) =>
 Enqueue from service code:
 
 ```csharp
-_outbox.Enqueue(new OrderConfirmed(orderId, totalCents));
-await _db.SaveChangesAsync(ct);   // outbox row commits with your other entity changes
+outbox.Enqueue(new OrderConfirmed(orderId, totalCents));
+await db.SaveChangesAsync(ct);   // outbox row commits with your other entity changes
 ```
 
-## What's in the box
+## Tables and migrations
 
-- `OutboxEntityConfiguration` — maps `OutboxRow` to `OrionPatch_Outbox` with covering indexes for the dispatcher's polling and lease-expiry queries.
-- `EfCoreOutbox` — `IOutbox` that buffers per-DbContext and binds via `ConditionalWeakTable` so the interceptor finds the right buffer without a service-provider hop.
-- `OrionPatchSaveChangesInterceptor` — six-override lifecycle (Saving / Saved / SaveChangesFailed and their async siblings) implementing a three-phase Flush / Commit / Revert so save failures re-buffer cleanly without double-inserting on retry.
-- `EfCoreOutboxStorage` — claim/complete/fail/dead-letter via `ExecuteUpdateAsync` single round-trips. From v0.3.2 it also implements `IDeadLetterStore` and `IOutboxArchivalStore` (see below).
-- Provider-aware claim strategy:
-  - SqlServer / PostgreSQL / MySQL — `SkipLockedClaimStrategy` with dialect-specific SQL. (v0.1.0 currently delegates these to the portable fallback; true `SKIP LOCKED` SQL lands in v0.2.)
-  - SQLite + unknown providers — `CompareAndSwapClaimStrategy` (portable optimistic-concurrency claim).
-
-## Dead-letter and archival (v0.3.2)
-
-`EfCoreOutboxStorage` implements the v0.3.0 `IDeadLetterStore` and `IOutboxArchivalStore` SPIs against two new tables, so deployments get the durable dead-letter destination and the retention reaper without writing their own storage.
-
-- **`OrionPatch_DeadLetter`** (`DeadLetterRow`) — the dispatcher routes a row that exhausts `MaxAttempts` here instead of flipping it to `DeadLettered` in place. The move (delete the source outbox row, insert the snapshot) runs in one transaction so it is atomic, and the dead-letter primary key is the source row id so a crash-replayed terminal path lands the message exactly once. Read it back with `GetDeadLetteredAsync()` (newest first, capped) or the paged `GetDeadLetteredAsync(skip, take, ct)` overload for triage over a large backlog.
-- **`OrionPatch_OutboxArchive`** (`OutboxArchiveRow`) — `ArchiveProcessedAsync(retention, nowUtc, ct)` reaps `Processed` rows older than the retention cutoff out of the hot outbox in bounded batches and returns the count moved. Archive mode (default) copies them here first; purge mode skips the table and deletes outright. This is operator-invoked — OrionPatch does not start a background reaper, so call it from your own scheduled job.
-
-Choose the mode at registration:
-
-```csharp
-services.AddOrionPatch()
-    .UseEntityFrameworkCore<AppDbContext>();             // archive mode (default)
-// or
-services.AddOrionPatch()
-    .UseEntityFrameworkCore<AppDbContext>(purgeOnArchive: true);   // purge mode
-```
-
-Invoke the reaper from a scheduled job, resolving the archival store from a scope:
-
-```csharp
-using var scope = serviceProvider.CreateScope();
-var archival = scope.ServiceProvider.GetRequiredService<IOutboxArchivalStore>();
-var reaped = await archival.ArchiveProcessedAsync(options.ArchiveRetention, DateTime.UtcNow, ct);
-```
-
-### Migration
-
-The runtime never creates tables. After upgrading to v0.3.2, `ApplyOrionPatchConfiguration()` adds the two new tables to your model; regenerate and apply a migration so they exist before the dead-letter store or the reaper runs:
+`ApplyOrionPatchConfiguration()` maps four tables: `OrionPatch_Outbox`, `OrionPatch_DeadLetter`, `OrionPatch_OutboxArchive` and `OrionPatch_Inbox`. The runtime never creates tables; add and apply a migration:
 
 ```bash
-dotnet ef migrations add OrionPatch_v0_3_2_DeadLetterAndArchive
+dotnet ef migrations add AddOrionPatch
 dotnet ef database update
 ```
 
-The two new tables are inert until you route a dead-letter or call `ArchiveProcessedAsync`, so applying the migration is safe to do ahead of turning either path on. No existing column or index changes — this migration is purely additive.
+## Claim strategy
 
-## Multi-DbContext
+The claim is picked from the DbContext's provider:
 
-v0.1.0 supports one OrionPatch-bound DbContext per host. Calling `UseEntityFrameworkCore<TDbContext>` twice silently overrides the previous registration's `IOutbox` and `IOutboxStorage` services. First-class multi-DbContext support is on the v0.2 roadmap.
+- PostgreSQL and MySQL / MariaDB: `FOR UPDATE SKIP LOCKED`.
+- SQL Server: `WITH (UPDLOCK, READPAST, ROWLOCK, READCOMMITTEDLOCK)`, so `READPAST` skips locked rows even with `READ_COMMITTED_SNAPSHOT` on.
+- SQLite and unrecognised providers: a portable compare-and-swap claim.
 
-See the [repo README](https://github.com/tunahanaliozturk/OrionPatch) for the full picture.
+A row another dispatcher holds is skipped, not waited on. A claimed row whose lease (`LeaseDuration`, default 2 min) has expired can be claimed again.
+
+## Dead-letter, redrive, archival and inbox
+
+`UseEntityFrameworkCore<TDbContext>()` also registers `IDeadLetterStore`, `IDeadLetterReplayStore` and `IOutboxArchivalStore` (scoped):
+
+- Rows that exhaust `MaxAttempts` move to `OrionPatch_DeadLetter` in one transaction, once per row id.
+- `RedriveAsync(id)` or `RedriveAsync(filter, batchSize)` puts them back in the outbox.
+- `ArchiveProcessedAsync(retention, nowUtc, ct)` moves processed rows to `OrionPatch_OutboxArchive` in batches; pass `purgeOnArchive: true` to `UseEntityFrameworkCore` to delete them instead. Call it from your own scheduled job.
+
+`UseEntityFrameworkCoreInbox<TDbContext>(consumer: "billing")` registers an `IInbox` backed by `OrionPatch_Inbox` for consumer-side dedup (used by the RabbitMQ consumer and the Kafka inbox).
+
+One OrionPatch-bound `DbContext` per host: a second `UseEntityFrameworkCore<T>` call adds a second `IOutbox` / `IOutboxStorage` registration and the last one wins. Not AOT- or trim-compatible, because EF Core is not.
+
+## Related packages
+
+- `OrionPatch` - the core this backend plugs into.
+- `OrionPatch.Kafka`, `OrionPatch.RabbitMQ`, `OrionPatch.AzureServiceBus` - broker sinks.
+- `OrionPatch.Testing` - in-memory storage for tests without a database.
+
+## Links
+
+- Documentation and full README: https://github.com/tunahanaliozturk/OrionPatch
+- Changelog: https://github.com/tunahanaliozturk/OrionPatch/blob/main/CHANGELOG.md
+- License: MIT

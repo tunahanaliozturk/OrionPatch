@@ -3,6 +3,7 @@
     <PackageId>OrionPatch.AzureServiceBus</PackageId>
     <Description>Azure Service Bus publisher sink for OrionPatch. Implements IOutboxSink by publishing envelopes to a queue or topic; sets MessageId to the envelope id and ApplicationProperties for orionpatch-message-type and W3C traceparent so downstream consumers dedupe and trace cleanly.</Description>
     <PackageTags>outbox;azure-service-bus;publisher;cqrs;dotnet</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,5 +15,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

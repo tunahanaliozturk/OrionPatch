@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="660" viewBox="0 0 1200 660">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; fill: #1e1b4b; }
+    .title { font-size: 24px; font-weight: 700; }
+    .subtitle { font-size: 14px; fill: #475569; }
+    .label { font-size: 15px; font-weight: 600; }
+    .small { font-size: 12.5px; fill: #475569; }
+    .code { font-family: "Cascadia Code", Consolas, "SF Mono", monospace; font-size: 13px; fill: #3730a3; }
+    .edge { font-size: 12.5px; fill: #334155; }
+    .step { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
+    .ext { fill: #f0f9ff; stroke: #0284c7; stroke-width: 2; }
+    .ok { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+    .fail { fill: #fef2f2; stroke: #dc2626; stroke-width: 2; }
+    .decision { fill: #fffbeb; stroke: #d97706; stroke-width: 2; }
+    .note { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 4 3; }
+    .lane { stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .flow { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+    .flow.alt { stroke: #dc2626; stroke-dasharray: 6 4; marker-end: url(#arrow-fail); }
+    .flow.back { stroke-dasharray: 6 4; }
+    .badge { fill: #4f46e5; }
+    .badge-text { font-size: 12px; font-weight: 700; fill: #ffffff; }
+  </style>
+
+
+  <rect width="1200" height="660" fill="#ffffff"/>
+
+  <text class="title" x="40" y="52">OrionPatch - retry, dead-letter and redrive</text>
+  <text class="subtitle" x="40" y="78">A failed send is retried with backoff; after MaxAttempts the row leaves the hot outbox, and an operator can redrive it.</text>
+
+  <!-- start -->
+  <rect class="step" x="40" y="160" width="210" height="80" rx="14"/>
+  <text class="label" x="145" y="192" text-anchor="middle">SendAsync throws</text>
+  <text class="small" x="145" y="216" text-anchor="middle">attempt = AttemptCount + 1</text>
+
+  <path class="flow" d="M250,200 L298,200"/>
+
+  <!-- decision 1 -->
+  <polygon class="decision" points="420,128 540,200 420,272 300,200"/>
+  <text class="code" x="420" y="198" text-anchor="middle" style="font-variant-ligatures: none">attempt &gt;= MaxAttempts</text>
+  <text class="small" x="420" y="220" text-anchor="middle">default 5</text>
+
+  <!-- yes: dead-letter -->
+  <path class="flow alt" d="M540,200 L598,200"/>
+  <text class="edge" x="569" y="190" text-anchor="middle">yes</text>
+
+  <polygon class="decision" points="720,128 840,200 720,272 600,200"/>
+  <text class="small" x="720" y="194" text-anchor="middle">storage implements</text>
+  <text class="code" x="720" y="214" text-anchor="middle">IDeadLetterStore?</text>
+
+  <path class="flow alt" d="M840,200 L898,200"/>
+  <text class="edge" x="869" y="190" text-anchor="middle">yes</text>
+
+  <rect class="fail" x="900" y="146" width="260" height="114" rx="14"/>
+  <text class="label" x="1030" y="174" text-anchor="middle">Move to dead-letter store</text>
+  <text class="code" x="1030" y="200" text-anchor="middle">DeadLetterAsync(id, ctx)</text>
+  <text class="small" x="1030" y="224" text-anchor="middle">out of OrionPatch_Outbox,</text>
+  <text class="small" x="1030" y="242" text-anchor="middle">into OrionPatch_DeadLetter, once</text>
+
+  <path class="flow alt" d="M720,272 L720,318"/>
+  <text class="edge" x="732" y="300">no</text>
+
+  <rect class="fail" x="600" y="320" width="240" height="80" rx="14"/>
+  <text class="label" x="720" y="352" text-anchor="middle">Mark DeadLettered</text>
+  <text class="small" x="720" y="376" text-anchor="middle">in place, Status = DeadLettered</text>
+
+  <!-- redrive -->
+  <path class="flow" d="M1030,260 L1030,438"/>
+  <text class="edge" x="1018" y="336" text-anchor="end">operator</text>
+  <text class="code" x="1018" y="356" text-anchor="end">RedriveAsync</text>
+
+  <rect class="ok" x="900" y="440" width="260" height="90" rx="14"/>
+  <text class="label" x="1030" y="468" text-anchor="middle">Back in the outbox</text>
+  <text class="small" x="1030" y="492" text-anchor="middle">same id, Pending, AttemptCount 0</text>
+  <text class="small" x="1030" y="512" text-anchor="middle">header redriven-from = source id</text>
+
+  <!-- no: retry -->
+  <path class="flow" d="M420,272 L420,318"/>
+  <text class="edge" x="432" y="300">no</text>
+
+  <rect class="step" x="300" y="320" width="240" height="110" rx="14"/>
+  <text class="label" x="420" y="348" text-anchor="middle">Schedule a retry</text>
+  <text class="code" x="420" y="372" text-anchor="middle">FailAsync(id, error, next)</text>
+  <text class="small" x="420" y="396" text-anchor="middle">Status = Pending, AttemptCount + 1</text>
+  <text class="small" x="420" y="416" text-anchor="middle">next = now + BackoffStrategy(attempt)</text>
+
+  <path class="flow" d="M420,430 L420,478"/>
+  <text class="edge" x="432" y="460">after the backoff</text>
+
+  <rect class="step" x="300" y="480" width="240" height="80" rx="14"/>
+  <text class="label" x="420" y="512" text-anchor="middle">Claimed again</text>
+  <text class="small" x="420" y="536" text-anchor="middle">next poll sends it again</text>
+
+  <path class="flow back" d="M300,520 L145,520 L145,242"/>
+  <text class="edge" x="157" y="380">next attempt</text>
+
+  <!-- notes -->
+  <rect class="note" x="580" y="440" width="300" height="90" rx="10"/>
+  <text class="small" x="596" y="464">Default: BackoffStrategy.Exponential(1 s, 30 min)</text>
+  <text class="small" x="596" y="484">waits 1 s, 2 s, 4 s, 8 s; attempt 5 is the last.</text>
+  <text class="small" x="596" y="504">BackoffStrategy.Fixed(delay) waits the same</text>
+  <text class="small" x="596" y="522">time between every attempt.</text>
+
+  <rect class="note" x="580" y="560" width="580" height="70" rx="10"/>
+  <text class="small" x="596" y="586">After either dead-letter path the dispatcher calls IDeadLetterSink.OnDeadLetteredAsync</text>
+  <text class="small" x="596" y="608">when one is registered (alerting). A failing sink is logged and counted, never retried.</text>
+</svg>
