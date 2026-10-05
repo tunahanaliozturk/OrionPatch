@@ -3,6 +3,7 @@
     <PackageId>OrionPatch.Kafka</PackageId>
     <Description>Apache Kafka publisher sink for OrionPatch. Implements IOutboxSink by producing each envelope to a configurable topic with the envelope id as the message key (partition affinity for ordering) and Kafka headers carrying orionpatch-message-type / orionpatch-correlation-id / consumer-supplied envelope headers.</Description>
     <PackageTags>outbox;kafka;publisher;cqrs;dotnet</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,5 +16,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

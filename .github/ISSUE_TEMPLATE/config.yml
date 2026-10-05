@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/tunahanaliozturk/OrionPatch#readme
+    about: The README and each package's NuGet readme document the real behaviour of the OrionPatch packages. Read them before asking "how do I ...".
+  - name: Roadmap
+    url: https://github.com/tunahanaliozturk/OrionPatch/blob/main/ROADMAP.md
+    about: What is planned next. Comment on a roadmap item rather than opening a duplicate request.
+  - name: Security vulnerability
+    url: https://github.com/tunahanaliozturk/OrionPatch/blob/main/SECURITY.md
+    about: Do not file a public issue. Report it privately as described in SECURITY.md.

@@ -3,6 +3,7 @@
     <PackageId>OrionPatch.RabbitMQ</PackageId>
     <Description>RabbitMQ publisher sink for OrionPatch. Implements IOutboxSink by publishing envelopes to a configurable exchange + routing key with publisher confirms, persistent delivery mode, and W3C traceparent / OrionPatch envelope id propagation via message headers. Subscription/consumer side stages to v0.2.5.</Description>
     <PackageTags>outbox;rabbitmq;publisher;cqrs;dotnet</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,5 +15,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionPatch\Moongazing.OrionPatch.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

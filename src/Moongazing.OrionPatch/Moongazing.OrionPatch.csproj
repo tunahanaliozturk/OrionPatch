@@ -3,6 +3,7 @@
     <PackageId>OrionPatch</PackageId>
     <Description>Transactional outbox primitive for .NET. Enqueue messages inside an EF Core SaveChanges transaction; a background dispatcher hands them to a pluggable IOutboxSink at-least-once. Ships ChannelOutboxSink (in-process); broker sinks are opt-in sub-packages.</Description>
     <PackageTags>outbox;messaging;ef-core;at-least-once;transactional;dispatcher</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Orion.Abstractions" />
@@ -15,5 +16,8 @@
     <InternalsVisibleTo Include="Moongazing.OrionPatch.Tests" />
     <InternalsVisibleTo Include="Moongazing.OrionPatch.EntityFrameworkCore" />
     <InternalsVisibleTo Include="Moongazing.OrionPatch.EntityFrameworkCore.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="docs/" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="580" viewBox="0 0 1200 580">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif; fill: #1e1b4b; }
+    .title { font-size: 24px; font-weight: 700; }
+    .subtitle { font-size: 14px; fill: #475569; }
+    .label { font-size: 15px; font-weight: 600; }
+    .small { font-size: 12.5px; fill: #475569; }
+    .code { font-family: "Cascadia Code", Consolas, "SF Mono", monospace; font-size: 13px; fill: #3730a3; }
+    .edge { font-size: 12.5px; fill: #334155; }
+    .step { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
+    .ext { fill: #f0f9ff; stroke: #0284c7; stroke-width: 2; }
+    .ok { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+    .fail { fill: #fef2f2; stroke: #dc2626; stroke-width: 2; }
+    .decision { fill: #fffbeb; stroke: #d97706; stroke-width: 2; }
+    .note { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 4 3; }
+    .lane { stroke: #cbd5e1; stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .flow { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); }
+    .flow.alt { stroke: #dc2626; stroke-dasharray: 6 4; marker-end: url(#arrow-fail); }
+    .flow.back { stroke-dasharray: 6 4; }
+    .badge { fill: #4f46e5; }
+    .badge-text { font-size: 12px; font-weight: 700; fill: #ffffff; }
+  </style>
+
+
+  <rect width="1200" height="580" fill="#ffffff"/>
+
+  <text class="title" x="40" y="52">OrionPatch - outbox write and dispatch</text>
+  <text class="subtitle" x="40" y="78">The outbox row commits with your data; the dispatcher sends it to the broker after the commit, at least once.</text>
+
+  <!-- 1: write path -->
+  <circle class="badge" cx="52" cy="112" r="12"/>
+  <text class="badge-text" x="52" y="116" text-anchor="middle">1</text>
+  <text class="small" x="72" y="116">write path, inside your request</text>
+
+  <rect class="step" x="40" y="130" width="250" height="82" rx="14"/>
+  <text class="label" x="165" y="160" text-anchor="middle">Your code</text>
+  <text class="code" x="165" y="183" text-anchor="middle">outbox.Enqueue(msg)</text>
+  <text class="small" x="165" y="203" text-anchor="middle">buffered on the scoped DbContext</text>
+
+  <path class="flow" d="M290,171 L328,171"/>
+
+  <rect class="step" x="330" y="130" width="260" height="82" rx="14"/>
+  <text class="label" x="460" y="158" text-anchor="middle">SaveChangesAsync()</text>
+  <text class="small" x="460" y="180" text-anchor="middle">OrionPatchSaveChangesInterceptor</text>
+  <text class="small" x="460" y="200" text-anchor="middle">adds the buffered rows to the save</text>
+
+  <rect class="note" x="670" y="130" width="490" height="82" rx="10"/>
+  <text class="small" x="688" y="156">Other sinks: UseChannelSink() delivers in-process through</text>
+  <text class="small" x="688" y="176">System.Threading.Channels; UseSink&lt;T&gt;() registers your own</text>
+  <text class="small" x="688" y="196">IOutboxSink. The dispatch path is the same for every sink.</text>
+
+  <path class="flow" d="M460,212 L460,260"/>
+  <text class="edge" x="450" y="242" text-anchor="end">INSERT + COMMIT in one transaction</text>
+
+  <!-- 2: dispatch loop -->
+  <rect class="note" x="40" y="262" width="250" height="100" rx="10"/>
+  <text class="small" x="56" y="286">Outbox row and your domain rows</text>
+  <text class="small" x="56" y="306">commit or roll back together. A</text>
+  <text class="small" x="56" y="326">failed save puts the messages</text>
+  <text class="small" x="56" y="346">back in the buffer.</text>
+
+  <rect class="ext" x="330" y="262" width="260" height="100" rx="14"/>
+  <text class="label" x="460" y="290" text-anchor="middle">Database</text>
+  <text class="code" x="460" y="314" text-anchor="middle">OrionPatch_Outbox</text>
+  <text class="small" x="460" y="336" text-anchor="middle">Pending, Claimed, Processed</text>
+
+  <path class="flow" d="M590,290 L668,290"/>
+  <text class="edge" x="629" y="281" text-anchor="middle">claim</text>
+  <path class="flow back" d="M670,336 L592,336"/>
+  <text class="edge" x="631" y="354" text-anchor="middle">Processed</text>
+
+  <circle class="badge" cx="670" cy="252" r="12"/>
+  <text class="badge-text" x="670" y="256" text-anchor="middle">2</text>
+  <text class="small" x="690" y="256">dispatch loop, in the background</text>
+
+  <rect class="step" x="670" y="262" width="240" height="100" rx="14"/>
+  <text class="label" x="790" y="288" text-anchor="middle">Dispatcher</text>
+  <text class="code" x="790" y="310" text-anchor="middle">ClaimNextAsync</text>
+  <text class="code" x="790" y="330" text-anchor="middle">CompleteAsync</text>
+  <text class="small" x="790" y="352" text-anchor="middle">polls every PollingInterval (1 s)</text>
+
+  <path class="flow" d="M910,312 L958,312"/>
+  <text class="edge" x="934" y="303" text-anchor="middle">send</text>
+
+  <rect class="step" x="960" y="262" width="200" height="100" rx="14"/>
+  <text class="label" x="1060" y="290" text-anchor="middle">IOutboxSink</text>
+  <text class="code" x="1060" y="314" text-anchor="middle">SendAsync(envelope)</text>
+  <text class="small" x="1060" y="336" text-anchor="middle">one call per claimed row</text>
+
+  <!-- brokers -->
+  <path class="flow" d="M1060,362 L1060,438"/>
+  <path class="flow" d="M1060,400 L650,400 L650,438"/>
+  <path class="flow" d="M855,400 L855,438"/>
+
+  <rect class="ext" x="555" y="440" width="190" height="100" rx="14"/>
+  <text class="label" x="650" y="470" text-anchor="middle">Kafka</text>
+  <text class="small" x="650" y="496" text-anchor="middle">OrionPatch.Kafka</text>
+  <text class="small" x="650" y="518" text-anchor="middle">idempotent producer, Acks.All</text>
+
+  <rect class="ext" x="760" y="440" width="190" height="100" rx="14"/>
+  <text class="label" x="855" y="470" text-anchor="middle">RabbitMQ</text>
+  <text class="small" x="855" y="496" text-anchor="middle">OrionPatch.RabbitMQ</text>
+  <text class="small" x="855" y="518" text-anchor="middle">publisher confirms, mandatory</text>
+
+  <rect class="ext" x="965" y="440" width="190" height="100" rx="14"/>
+  <text class="label" x="1060" y="470" text-anchor="middle">Azure Service Bus</text>
+  <text class="small" x="1060" y="496" text-anchor="middle">OrionPatch.AzureServiceBus</text>
+  <text class="small" x="1060" y="518" text-anchor="middle">MessageId = envelope id</text>
+
+  <rect class="note" x="40" y="440" width="480" height="100" rx="10"/>
+  <text class="small" x="58" y="464">At least once: a crash after SendAsync but before CompleteAsync</text>
+  <text class="small" x="58" y="484">leaves the row Claimed. Once LeaseDuration (2 min) has passed it</text>
+  <text class="small" x="58" y="504">is claimed and sent again. Sinks and consumers must be idempotent.</text>
+  <text class="small" x="58" y="524">A SendAsync that throws takes the retry path (next diagram).</text>
+</svg>

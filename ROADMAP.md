@@ -16,7 +16,7 @@ If an item here matters to you, open a GitHub issue so we can weigh it against e
 
 ## Released
 
-Current version: **0.4.1**. A transactional outbox primitive plus an idempotent inbox, three
+Current version: **0.4.2**. A transactional outbox primitive plus an idempotent inbox, three
 broker sinks (Kafka, RabbitMQ, Azure Service Bus), a durable dead-letter store with replay /
 redrive, retention-based archival, a native provider `SKIP LOCKED` batch claim, and an
 OpenTelemetry surface. The full per-version history is in the
@@ -39,6 +39,7 @@ OpenTelemetry surface. The full per-version history is in the
 - **v0.3.3** (2026-06-27) - Dead-letter replay / redrive API (`IDeadLetterReplayStore`) on both the in-memory and EF Core stores. See the dedicated section below.
 - **v0.4.0** (2026-06-28) - Native provider `SKIP LOCKED` batch claim. `SkipLockedClaimStrategy` issues real lock-and-claim SQL per provider (`FOR UPDATE SKIP LOCKED` on PostgreSQL / MySQL, `WITH (UPDLOCK, READPAST, ROWLOCK, READCOMMITTEDLOCK)` on SQL Server - the `READCOMMITTEDLOCK` hint keeps `READPAST` skipping locked rows even under `READ_COMMITTED_SNAPSHOT`). SQLite and unrecognized providers keep the portable compare-and-swap fallback. See the dedicated section below.
 - **v0.4.1** (2026-07-01) - **Convergence pilot onto `Orion.Abstractions`.** The dispatcher's fault-safe async observer invocation (`IOutboxDispatchObserver.OnDispatchedAsync`) now runs through the shared `SafeObserverInvoker.InvokeAsync` instead of a bespoke in-tree `try`/`catch`, with the observer-fault logging + `dispatch_observer_failures` counter preserved through the invoker's `onFault` hook. Internal plumbing only: zero public-API change, zero behavior change (the observer contract, metrics, spans, and outbox semantics are byte-identical to v0.4.0). Instrumentation convergence onto `OrionInstrumentation` was deferred because it could not preserve the existing `public static OrionPatchDiagnostics` surface and the exact source/metric names without an observability-visible change.
+- **v0.4.2** (2026-07-27) - Packaging fix: the `Kafka`, `AzureServiceBus` and `RabbitMQ` sub-packages now ship with the package icon (packed once from `Directory.Build.props`). No code change. Test-only transitive dependencies pinned past four advisories; no shipped package was affected.
 
 ---
 
@@ -55,8 +56,8 @@ OpenTelemetry.
 - `OutboxDispatcherHostedService` - background loop: claim a batch, dispatch each
   envelope, complete or fail. Single instance per process; competing-consumers safe
   across replicas via the storage backend's claim primitive.
-- Retry with exponential backoff (default 1 s → 5 s → 30 s → 5 min → 30 min). Dead-letter
-  after `MaxAttempts` (default 5).
+- Retry with exponential backoff (`BackoffStrategy.Exponential(1 s, 30 min)`: the delay doubles
+  per attempt, 1 s, 2 s, 4 s, 8 s). Dead-letter after `MaxAttempts` (default 5).
 - `ChannelOutboxSink` - built-in in-process sink backed by `System.Threading.Channels`.
   Useful for monoliths and tests; zero external dependency.
 - `OrionPatch.EntityFrameworkCore` - `IOutboxStorage` over EF Core; `OrionPatch_Outbox`
@@ -116,7 +117,7 @@ Storage that does not implement these keeps the prior behaviour, so both are bac
 
 ---
 
-## v0.3.2 - Dead-letter and archival on the EF Core backend *(planned, Q3 2026)*
+## v0.3.2 - Dead-letter and archival on the EF Core backend *(shipped 2026-06-22)*
 
 v0.3.0 shipped the `IDeadLetterStore` and `IOutboxArchivalStore` SPIs and implemented them on
 the in-memory testing storage only. This release brings both to the production EF Core backend
@@ -159,7 +160,7 @@ prior behaviour, so it is backward compatible.
   operators can graph the backlog draining against the existing `deadlettered` counter.
 - **Testing helper** - `OrionPatch.Testing` scenario helper `AssertRedriven` so the redrive path is
   covered like the dispatch path. (A CLI / `IHostedService` maintenance surface and the
-  `OrionPatch.Dashboard` one-click redrive UI remain on the v0.4.1 operator-surface milestone.)
+  `OrionPatch.Dashboard` one-click redrive UI remain on the operator-surface milestone below.)
 
 ---
 
@@ -204,7 +205,7 @@ non-additive surface) and tracked below.
 
 ---
 
-## v0.4.1 - Operator surface *(planned, Q1 2027)*
+## Operator surface *(planned, Q1 2027)*
 
 Quality-of-life for running an outbox in production, building on the v0.3.x dead-letter and
 archival work.
@@ -270,7 +271,7 @@ If any of the above maps to a real workload you are on right now, open an issue 
 - **Distributed transactions across sinks.** OrionPatch dispatches to one sink with
   at-least-once. Two-phase commit across heterogeneous resources is not in scope.
 - **Exactly-once delivery.** At-least-once is the contract. The combination of
-  OrionPatch.Outbox + OrionPatch.Inbox + idempotent consumer logic is the path to
+  OrionPatch outbox + `IInbox` dedup + idempotent consumer logic is the path to
   effectively-once. We will not invent a stronger guarantee than the underlying broker
   can provide.
 
