@@ -71,10 +71,14 @@ dotnet add package OrionPatch.Kafka   # or OrionPatch.RabbitMQ / OrionPatch.Azur
 ```
 
 ```csharp
+using System.Text;                                   // Encoding, in the custom sink below
 using Microsoft.EntityFrameworkCore;
+using Moongazing.OrionPatch.Abstractions;            // IOutbox, IOutboxSink
 using Moongazing.OrionPatch.DependencyInjection;
+using Moongazing.OrionPatch.EntityFrameworkCore;     // ApplyOrionPatchConfiguration
 using Moongazing.OrionPatch.EntityFrameworkCore.DependencyInjection;
 using Moongazing.OrionPatch.Kafka;
+using Moongazing.OrionPatch.Models;                  // OutboxEnvelope
 
 services.AddDbContext<AppDbContext>((sp, options) =>
 {

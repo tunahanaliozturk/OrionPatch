@@ -46,6 +46,7 @@ Each record carries the headers `orionpatch-envelope-id`, `orionpatch-message-ty
 ## Inbound consumer
 
 ```csharp
+using Moongazing.OrionPatch.Abstractions;
 using Moongazing.OrionPatch.Channels;
 using Moongazing.OrionPatch.Kafka.Inbound;
 
@@ -64,14 +65,42 @@ services.AddOrionPatchKafkaInbox<OrderConfirmedHandler>(o =>
     o.BootstrapServers = "localhost:9092";
     o.GroupId = "billing";
     o.Topics = ["orders"];
+});
+```
+
+- An `IInbox` registration is required: a record whose envelope id was already accepted is committed without calling the handler. A record without an `orionpatch-envelope-id` header is logged, committed and dropped.
+- The offset is committed only after the handler succeeds. A failing record is sought back and redelivered, with no limit unless a dead-letter topic is set up as below.
+
+### Dead-letter topic
+
+`DeadLetterTopic` routes a record there after `MaxDeliveryAttempts` (default 5) failed attempts. It only works with an `IKafkaInboundDeadLetterProducer` registration, and none is registered by default: without one, the poison record is sought back and redelivered indefinitely, exactly as with no `DeadLetterTopic`. Register a producer:
+
+```csharp
+using Confluent.Kafka;
+using Moongazing.OrionPatch.Kafka.Inbound;
+
+public sealed class KafkaDeadLetterProducer(IProducer<string, byte[]> producer) : IKafkaInboundDeadLetterProducer
+{
+    public Task ProduceAsync(string topic, Message<string, byte[]> message, CancellationToken cancellationToken) =>
+        producer.ProduceAsync(topic, message, cancellationToken);
+}
+
+services.AddSingleton(_ => new ProducerBuilder<string, byte[]>(
+    new ProducerConfig { BootstrapServers = "localhost:9092" }).Build());
+services.AddSingleton<IKafkaInboundDeadLetterProducer, KafkaDeadLetterProducer>();
+
+services.AddOrionPatchKafkaInbox<OrderConfirmedHandler>(o =>
+{
+    o.BootstrapServers = "localhost:9092";
+    o.GroupId = "billing";
+    o.Topics = ["orders"];
     o.DeadLetterTopic = "orders.dlq";
     o.MaxDeliveryAttempts = 5;
 });
 ```
 
-- An `IInbox` registration is required: a record whose envelope id was already accepted is committed without calling the handler. A record without an `orionpatch-envelope-id` header is logged, committed and dropped.
-- The offset is committed only after the handler succeeds. A failing record is retried; with `DeadLetterTopic` set it is routed there after `MaxDeliveryAttempts`.
-- Dead-letter routing needs an `IKafkaInboundDeadLetterProducer` registration; none is registered by default.
+The routed record keeps the original key, value and headers and adds `orionpatch-dlq-*` headers (original topic, partition, offset, attempt count, exception type). If the produce throws, the record is redelivered and routing is tried again on the next failure.
+
 - Attempt counts live in `InMemoryKafkaAttemptCountStore` by default; `EfCoreKafkaAttemptCountStore<TDbContext>` (in `OrionPatch.EntityFrameworkCore`) persists them across restarts.
 - Metrics go to the meter `Moongazing.OrionPatch.Kafka.Inbound`.
 
