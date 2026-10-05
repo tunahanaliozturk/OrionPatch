@@ -27,6 +27,20 @@ services.AddOrionPatch(o => o.PollingInterval = TimeSpan.FromSeconds(1))
     .UseChannelSink();           // or .UseSink<MySink>(), or a broker sink package
 ```
 
+`UseEntityFrameworkCore` only registers services. Map the outbox tables in your `DbContext` (namespace `Moongazing.OrionPatch.EntityFrameworkCore`):
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder) =>
+    modelBuilder.ApplyOrionPatchConfiguration();
+```
+
+This maps four tables (`OrionPatch_Outbox`, `OrionPatch_DeadLetter`, `OrionPatch_OutboxArchive`, `OrionPatch_Inbox`). The runtime never creates them; add and apply a migration:
+
+```bash
+dotnet ef migrations add AddOrionPatch
+dotnet ef database update
+```
+
 Then enqueue with `IOutbox.Enqueue(message)` before `SaveChangesAsync`; the message commits with your data and is dispatched after the commit.
 
 The built-in `ChannelOutboxSink` delivers in-process (bounded channel, capacity 1000, `BoundedChannelFullMode.Wait`). Drain it anywhere in your app:
